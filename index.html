@@ -138,13 +138,6 @@
         <div id="red-score" class="text-lg font-black text-white leading-none">0</div>
       </div>
     </div>
-
-    <!-- Match Leave Action (Only shown during active Arena Match) -->
-    <div class="flex items-center gap-2 pointer-events-auto">
-      <button id="btn-return-hub" onclick="returnToHub()" class="hidden bg-rose-600 hover:bg-rose-500 text-white px-3 py-2 rounded-xl text-xs font-black transition shadow-lg">
-        🏰 Leave Match
-      </button>
-    </div>
   </header>
 
   <!-- Combo Multiplier Badge -->
@@ -2853,7 +2846,6 @@
       }
 
       document.getElementById('arena-scoreboard').classList.remove('hidden');
-      document.getElementById('btn-return-hub').classList.remove('hidden');
       document.getElementById('arena-mode-label').textContent = title;
       document.getElementById('arena-map-label').textContent = mapDisplayName;
       document.getElementById('blue-score').textContent = '0';
@@ -2990,7 +2982,6 @@
 
       document.getElementById('arena-scoreboard').classList.add('hidden');
       document.getElementById('queue-banner').classList.add('hidden');
-      document.getElementById('btn-return-hub').classList.add('hidden');
 
       const hintBar = document.getElementById('hotbar-hint-bar');
       if (hintBar) {
