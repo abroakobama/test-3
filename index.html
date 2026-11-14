@@ -138,6 +138,25 @@
         <div id="red-score" class="text-lg font-black text-white leading-none">0</div>
       </div>
     </div>
+
+    <!-- Quick Action Navigation -->
+    <div class="glass-panel rounded-2xl p-1.5 flex items-center gap-1.5 pointer-events-auto shadow-2xl">
+      <button onclick="openSamsShop()" title="Sam's Forge [B]" class="px-2.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/30 border border-amber-400/40 text-amber-200 text-xs font-black transition">
+        ⚒️ <span class="hidden md:inline">Forge</span>
+      </button>
+      <button onclick="openArmory()" title="Champion Armory [C]" class="px-2.5 py-1.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/30 border border-sky-400/40 text-sky-200 text-xs font-black transition">
+        🛡️ <span class="hidden md:inline">Armory</span>
+      </button>
+      <button onclick="openModal('quests-modal')" title="Forge Bounties" class="px-2.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 text-xs font-black transition">
+        📜 <span class="hidden md:inline">Bounties</span>
+      </button>
+      <button onclick="toggleEmoteWheel()" title="Emotes [G]" class="px-2.5 py-1.5 rounded-xl bg-pink-500/15 hover:bg-pink-500/30 border border-pink-400/40 text-pink-200 text-xs font-black transition">
+        💃
+      </button>
+      <button onclick="openModal('settings-modal')" title="Settings" class="px-2.5 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-600/50 text-slate-200 text-xs font-black transition">
+        ⚙️
+      </button>
+    </div>
   </header>
 
   <!-- Combo Multiplier Badge -->
@@ -149,7 +168,7 @@
   <!-- Matchmaking Queue Banner -->
   <div id="queue-banner" class="hidden fixed top-20 left-1/2 -translate-x-1/2 z-20 glass-panel border-sky-400/50 rounded-2xl px-4 py-2 flex items-center gap-3 shadow-2xl animate-glow">
     <div class="w-2.5 h-2.5 rounded-full bg-sky-400 animate-ping"></div>
-    <span id="queue-text" class="text-xs font-black text-sky-200 tracking-wide">Searching 1V1 DUEL... (3s)</span>
+    <span id="queue-text" class="text-xs font-black text-sky-200 tracking-wide">Searching 1V1 DUEL... (0s / 30s)</span>
     <button onclick="cancelQueue()" class="px-2.5 py-1 rounded-lg bg-rose-500/25 hover:bg-rose-500/40 text-rose-200 text-[11px] font-black border border-rose-400/40">
       Cancel
     </button>
@@ -707,6 +726,7 @@
       redScore: 0,
       matchKills: 0,
       matchMode: null,
+      usedFillBots: false,
       keys: {},
       isPointerLocked: false,
       lastPointerLockExit: 0,
@@ -811,6 +831,8 @@
             wins: profile.wins,
             level: profile.level,
             screen: state.screen,
+            queueMode: state.queue ? state.queue.modeId : null,
+            connectingArena: !!(state.queue && state.queue.connecting),
             pos: { x: state.pos.x, y: state.pos.y, z: state.pos.z },
             yaw: state.yaw,
             equipped: profile.equipped,
@@ -828,6 +850,46 @@
         entityGroup.remove(entry.rig.root);
       }
       remotePlayerRigs.delete(id);
+    }
+
+    function applyPvpDamageToLocalPlayer(rawDmg, attackerId, attackerName) {
+      if (state.screen !== 'arena' || state.hp <= 0) return;
+      const shield = getItemById(profile.equipped.shield) || CATALOG.shield[0];
+      const finalDmg = state.blocking
+        ? Math.max(2, Math.round(rawDmg * (1 - (shield.blockPct || 0.55))))
+        : rawDmg;
+
+      if (state.blocking) {
+        AudioFX.play('block');
+        spawnFloatingDamage(state.pos, 'BLOCKED ' + finalDmg, 'text-sky-300', '');
+      } else {
+        AudioFX.play('hit');
+        spawnFloatingDamage(state.pos, finalDmg, 'text-rose-400', '-');
+      }
+
+      state.hp = Math.max(0, state.hp - finalDmg);
+      if (state.hp === 0) {
+        state.hp = state.maxHp;
+        state.pos.set(0, 0, 20);
+        state.redScore += 1;
+        document.getElementById('red-score').textContent = String(state.redScore);
+        showToast('Defeated by ' + (attackerName || 'Opponent') + '! Respawning...');
+
+        if (attackerId && mpChannel) {
+          try {
+            mpChannel.postMessage({
+              type: 'pvp_kill',
+              killerId: attackerId,
+              victimId: profile.id,
+              victimName: profile.name
+            });
+          } catch (e) {}
+        }
+
+        if (state.matchConfig && state.redScore >= state.matchConfig.targetWins) {
+          finishArenaMatch(false);
+        }
+      }
     }
 
     try {
@@ -879,40 +941,6 @@
       }
     });
 
-    function applyPvpDamageToLocalPlayer(rawDmg, attackerId, attackerName) {
-      if (state.screen !== 'arena' || state.hp <= 0) return;
-      const shield = getItemById(profile.equipped.shield) || CATALOG.shield[0];
-      const finalDmg = state.blocking ? Math.max(2, Math.round(rawDmg * (1 - (shield.blockPct || 0.55)))) : rawDmg;
-      if (state.blocking) {
-        AudioFX.play('block');
-        spawnFloatingDamage(state.pos, 'BLOCKED ' + finalDmg, 'text-sky-300', '');
-      } else {
-        AudioFX.play('hit');
-        spawnFloatingDamage(state.pos, finalDmg, 'text-rose-400', '-');
-      }
-      state.hp = Math.max(0, state.hp - finalDmg);
-      if (state.hp === 0) {
-        state.hp = state.maxHp;
-        state.pos.set(0, 0, 20);
-        state.redScore += 1;
-        document.getElementById('red-score').textContent = String(state.redScore);
-        showToast('Defeated by ' + (attackerName || 'Player') + '! Respawning...');
-        if (mpChannel && attackerId) {
-          try {
-            mpChannel.postMessage({
-              type: 'pvp_kill',
-              killerId: attackerId,
-              victimId: profile.id,
-              victimName: profile.name
-            });
-          } catch (e) {}
-        }
-        if (state.matchConfig && state.redScore >= state.matchConfig.targetWins) {
-          finishArenaMatch(false);
-        }
-      }
-    }
-
     function handleRemotePlayerAttack(msg) {
       const entry = remotePlayerRigs.get(msg.attackerId);
       if (entry) {
@@ -923,14 +951,18 @@
       const atkPos = new THREE.Vector3(msg.pos.x, msg.pos.y, msg.pos.z);
       spawnSlashArcEffect(atkPos, msg.yaw, msg.color || 0xf43f5e, msg.comboStep || 0, msg.grip || '1h');
 
-      const forward = new THREE.Vector3(-Math.sin(msg.yaw), 0, -Math.cos(msg.yaw));
       const toMe = new THREE.Vector3().subVectors(state.pos, atkPos);
       toMe.y = 0;
       const dist = toMe.length();
       if (dist <= (msg.range || 3.4) + 0.65) {
-        toMe.normalize();
-        if (msg.aoe || dist < 0.1 || forward.dot(toMe) > 0.25) {
-          applyPvpDamageToLocalPlayer(msg.dmg || 18, msg.attackerId, msg.attackerName);
+        if (msg.aoe) {
+          applyPvpDamageToLocalPlayer(msg.dmg || 24, msg.attackerId, msg.attackerName || 'Player');
+        } else {
+          const forward = new THREE.Vector3(-Math.sin(msg.yaw), 0, -Math.cos(msg.yaw));
+          toMe.normalize();
+          if (dist < 0.1 || forward.dot(toMe) > 0.25) {
+            applyPvpDamageToLocalPlayer(msg.dmg || 18, msg.attackerId, msg.attackerName || 'Player');
+          }
         }
       }
     }
@@ -942,19 +974,6 @@
         if (!activeIds.has(id)) removeRemotePlayerMesh(id);
       }
 
-      if (state.screen === 'arena') {
-        const pvpStatusEl = document.getElementById('arena-pvp-status');
-        if (pvpStatusEl) {
-          if (peers.length > 0) {
-            pvpStatusEl.textContent = 'LIVE MULTIPLAYER (' + (peers.length + 1) + ' IN ARENA)';
-            pvpStatusEl.className = 'text-[8px] font-black text-emerald-300 uppercase tracking-wider mt-0.5';
-          } else {
-            pvpStatusEl.textContent = 'ARENA OPEN — WAITING FOR PLAYERS';
-            pvpStatusEl.className = 'text-[8px] font-black text-sky-300 uppercase tracking-wider mt-0.5';
-          }
-        }
-      }
-
       peers.forEach(peer => {
         let entry = remotePlayerRigs.get(peer.id);
         const eqSig = JSON.stringify(peer.equipped || {}) + '|' + (peer.activeSlot || 'main');
@@ -964,7 +983,14 @@
           const overhead = createCharacterOverheadSprite(peer.name || 'Player', 'REAL PLAYER', state.screen === 'arena' ? 'red' : 'blue', 100, 100);
           rig.root.add(overhead.sprite);
           entityGroup.add(rig.root);
-          entry = { rig, overhead, eqSig, prevPos: new THREE.Vector3(peer.pos.x, peer.pos.y, peer.pos.z), atkAnim: 0, atkStep: 0 };
+          entry = {
+            rig,
+            overhead,
+            eqSig,
+            prevPos: new THREE.Vector3(peer.pos.x, peer.pos.y, peer.pos.z),
+            atkAnim: 0,
+            atkStep: 0
+          };
           remotePlayerRigs.set(peer.id, entry);
         }
 
@@ -1782,6 +1808,7 @@
       return sprite;
     }
 
+    // REAL-PLAYERS-ONLY LEADERBOARD TEXTURE (FILL-IN BOTS ARE NEVER INCLUDED)
     function updateHubLeaderboardTexture() {
       if (!hubLeaderboardMesh) return;
       const c = document.createElement('canvas');
@@ -2608,7 +2635,7 @@
     }
 
     // =========================================================================
-    // 8. COMBAT, DIRECTIONAL 3D SLASH ARCS & PROJECTILES (REAL PVP ONLY)
+    // 8. COMBAT, DIRECTIONAL 3D SLASH ARCS & PROJECTILES
     // =========================================================================
     let projectiles = [];
     let slashEffects = [];
@@ -2618,6 +2645,7 @@
       state.activeSlot = slot;
       rebuildLocalWarrior();
       updateHUD();
+      syncLocalRealPlayerEntry();
     }
 
     function spawnSlashArcEffect(origin, yaw, colorHex = 0x38bdf8, comboStep = 0, grip = '1h') {
@@ -2694,26 +2722,28 @@
       state.attackCooldown = wep.cd;
       state.attackCooldownMax = wep.cd;
       state.comboStep = (state.comboStep + 1) % 3;
+      state.comboCount += 1;
+      state.comboTimer = 3.2;
       AudioFX.play('swing');
 
-      const aimPitch = Math.max(-0.85, Math.min(0.85, state.pitch));
-      const fwd = new THREE.Vector3(
-        -Math.sin(state.yaw) * Math.cos(aimPitch),
-        -Math.sin(aimPitch),
-        -Math.cos(state.yaw) * Math.cos(aimPitch)
-      ).normalize();
+      const forward = new THREE.Vector3(-Math.sin(state.yaw), 0, -Math.cos(state.yaw));
 
-      if (slot === 'ranged') {
+      if (wep.grip === 'ranged') {
         AudioFX.play('shoot');
-        const startPos = state.pos.clone().add(new THREE.Vector3(0, 1.35, 0)).addScaledVector(fwd, 0.9);
-        spawnArrowProjectile(startPos, fwd, 'blue', finalDmg, profile.id);
+        const lookDir = new THREE.Vector3(
+          -Math.sin(state.yaw) * Math.cos(state.pitch),
+          -Math.sin(state.pitch),
+          -Math.cos(state.yaw) * Math.cos(state.pitch)
+        ).normalize();
+        const origin = state.pos.clone().add(new THREE.Vector3(0, 1.48, 0)).addScaledVector(forward, 0.7);
+        spawnArrowProjectile(origin, lookDir, 'blue', finalDmg, profile.id);
         if (mpChannel) {
           try {
             mpChannel.postMessage({
               type: 'shoot',
               shooterId: profile.id,
-              origin: { x: startPos.x, y: startPos.y, z: startPos.z },
-              dir: { x: fwd.x, y: fwd.y, z: fwd.z },
+              origin: { x: origin.x, y: origin.y, z: origin.z },
+              dir: { x: lookDir.x, y: lookDir.y, z: lookDir.z },
               dmg: finalDmg
             });
           } catch (e) {}
@@ -2731,34 +2761,352 @@
             attackerName: profile.name,
             pos: { x: state.pos.x, y: state.pos.y, z: state.pos.z },
             yaw: state.yaw,
-            range: wep.range,
-            dmg: finalDmg,
             color: wep.color,
             comboStep: currentStep,
-            grip: wep.grip
+            grip: wep.grip,
+            range: wep.range,
+            dmg: finalDmg,
+            aoe: false
           });
         } catch (e) {}
+      }
+
+      if (state.screen === 'arena') {
+        for (const entry of remotePlayerRigs.values()) {
+          if (!entry.rig) continue;
+          const toTarget = new THREE.Vector3().subVectors(entry.rig.root.position, state.pos);
+          toTarget.y = 0;
+          const dist = toTarget.length();
+          if (dist <= wep.range + 0.65) {
+            toTarget.normalize();
+            if (dist < 0.1 || forward.dot(toTarget) > 0.25) {
+              AudioFX.play('hit');
+              spawnFloatingDamage(entry.rig.root.position, finalDmg, 'text-amber-300', '-');
+            }
+          }
+        }
+
+        for (let i = 0; i < arenaFillBots.length; i++) {
+          const bot = arenaFillBots[i];
+          if (bot.hp <= 0) continue;
+          const toBot = new THREE.Vector3().subVectors(bot.pos, state.pos);
+          toBot.y = 0;
+          const dist = toBot.length();
+          if (dist <= wep.range + 0.65) {
+            toBot.normalize();
+            if (dist < 0.1 || forward.dot(toBot) > 0.25) {
+              damageFillInBot(bot, finalDmg);
+            }
+          }
+        }
+      }
+    }
+
+    // =========================================================================
+    // 9. ABILITIES, 30-SECOND MATCHMAKING QUEUE & RARITY FILL-IN BOTS
+    // =========================================================================
+    let arenaFillBots = [];
+
+    const RARITY_WEIGHTS = [
+      { rarity: 'Common', weight: 46 },
+      { rarity: 'Rare', weight: 30 },
+      { rarity: 'Epic', weight: 17 },
+      { rarity: 'Legendary', weight: 7 }
+    ];
+
+    function rollRandomRarity() {
+      const total = RARITY_WEIGHTS.reduce((acc, r) => acc + r.weight, 0);
+      let roll = Math.random() * total;
+      for (const entry of RARITY_WEIGHTS) {
+        if (roll < entry.weight) return entry.rarity;
+        roll -= entry.weight;
+      }
+      return 'Common';
+    }
+
+    function rollRandomItemByRarity(category) {
+      const pool = CATALOG[category] || [];
+      if (pool.length === 0) return null;
+      const targetRarity = rollRandomRarity();
+      const matching = pool.filter(item => item.rarity === targetRarity);
+      const candidates = matching.length > 0 ? matching : pool;
+      return candidates[Math.floor(Math.random() * candidates.length)];
+    }
+
+    function generateRandomBotLoadout() {
+      const mainItem = rollRandomItemByRarity('main') || CATALOG.main[0];
+      const closeItem = rollRandomItemByRarity('close') || CATALOG.close[0];
+      const rangedItem = rollRandomItemByRarity('ranged') || CATALOG.ranged[0];
+      const shieldItem = rollRandomItemByRarity('shield') || CATALOG.shield[0];
+      const armourItem = rollRandomItemByRarity('armour') || CATALOG.armour[0];
+      const auraItem = rollRandomItemByRarity('aura') || CATALOG.aura[0];
+      const slots = ['main', 'close', 'ranged'];
+      const chosenSlot = slots[Math.floor(Math.random() * slots.length)];
+      const activeWeapon = chosenSlot === 'main' ? mainItem : chosenSlot === 'close' ? closeItem : rangedItem;
+      return {
+        equipped: {
+          main: mainItem.id,
+          close: closeItem.id,
+          ranged: rangedItem.id,
+          shield: shieldItem.id,
+          armour: armourItem.id,
+          aura: auraItem.id
+        },
+        activeSlot: chosenSlot,
+        rarityTag: activeWeapon.rarity.toUpperCase() + ' LOADOUT',
+        maxHp: 110 + (armourItem.hpBonus || 0),
+        moveSpeed: 6.4 + (armourItem.speedBonus || 0) * 0.75,
+        blockPct: shieldItem.blockPct || 0.5
+      };
+    }
+
+    function clearArenaFillBots() {
+      for (const bot of arenaFillBots) {
+        if (bot.rig && bot.rig.root && entityGroup) {
+          entityGroup.remove(bot.rig.root);
+        }
+      }
+      arenaFillBots = [];
+    }
+
+    function spawnFillInBotsForMode(modeId) {
+      clearArenaFillBots();
+      const teamCounts = {
+        '1v1': { blue: 0, red: 1 },
+        '2v2': { blue: 1, red: 2 },
+        '3v3': { blue: 2, red: 3 },
+        '4v4': { blue: 3, red: 4 },
+        'ffa': { blue: 0, red: 3 }
+      };
+      const cfg = teamCounts[modeId] || { blue: 0, red: 1 };
+      let botCounter = 1;
+
+      const spawnBot = (team, idx) => {
+        const loadout = generateRandomBotLoadout();
+        const rig = buildWarriorRig(loadout.equipped, loadout.activeSlot, false);
+        const label = 'Fill-In Bot #' + botCounter++;
+        const overhead = createCharacterOverheadSprite(label, loadout.rarityTag + ' (UNRANKED)', team, loadout.maxHp, loadout.maxHp);
+        rig.root.add(overhead.sprite);
+
+        const spawnZ = team === 'blue' ? 18 : -18;
+        const spawnX = (idx - 1) * 4.2;
+        const pos = new THREE.Vector3(spawnX, 0, spawnZ);
+        rig.root.position.copy(pos);
+        entityGroup.add(rig.root);
+
+        arenaFillBots.push({
+          id: 'fill_bot_' + botCounter,
+          name: label,
+          team,
+          pos,
+          yaw: team === 'blue' ? 0 : Math.PI,
+          hp: loadout.maxHp,
+          maxHp: loadout.maxHp,
+          moveSpeed: loadout.moveSpeed,
+          blockPct: loadout.blockPct,
+          equipped: loadout.equipped,
+          activeSlot: loadout.activeSlot,
+          rig,
+          overhead,
+          attackCooldown: 0.9 + Math.random() * 0.6,
+          attackTimer: 0,
+          blocking: false,
+          strafeDir: Math.random() < 0.5 ? -1 : 1,
+          decisionTimer: 0.6 + Math.random() * 0.8
+        });
+      };
+
+      for (let i = 0; i < cfg.blue; i++) spawnBot('blue', i);
+      for (let i = 0; i < cfg.red; i++) spawnBot('red', i);
+    }
+
+    function damageFillInBot(bot, rawDmg) {
+      if (!bot || bot.hp <= 0) return;
+      const finalDmg = bot.blocking ? Math.max(2, Math.round(rawDmg * (1 - bot.blockPct))) : rawDmg;
+      if (bot.blocking) {
+        AudioFX.play('block');
+        spawnFloatingDamage(bot.pos, 'BLOCKED ' + finalDmg, 'text-sky-300', '');
+      } else {
+        AudioFX.play('hit');
+        spawnFloatingDamage(bot.pos, finalDmg, 'text-amber-300', '-');
+      }
+      bot.hp = Math.max(0, bot.hp - finalDmg);
+      bot.overhead.redraw(bot.hp, bot.maxHp);
+
+      if (bot.hp === 0) {
+        if (bot.team === 'red') {
+          state.matchKills += 1;
+          profile.kills += 1;
+          state.blueScore += 1;
+          document.getElementById('blue-score').textContent = String(state.blueScore);
+          advanceQuest('q1', 1);
+          showToast('Defeated ' + bot.name + '! (+1 Point)');
+          if (state.matchConfig && state.blueScore >= state.matchConfig.targetWins) {
+            finishArenaMatch(true);
+            return;
+          }
+        } else {
+          state.redScore += 1;
+          document.getElementById('red-score').textContent = String(state.redScore);
+          if (state.matchConfig && state.redScore >= state.matchConfig.targetWins) {
+            finishArenaMatch(false);
+            return;
+          }
+        }
+        bot.hp = bot.maxHp;
+        bot.overhead.redraw(bot.hp, bot.maxHp);
+        bot.pos.set((Math.random() - 0.5) * 10, 0, bot.team === 'blue' ? 18 : -18);
+      }
+    }
+
+    function updateArenaFillBots(dt) {
+      if (arenaFillBots.length === 0) return;
+
+      const realArenaPeers = getActiveRemotePlayers('arena');
+      if (realArenaPeers.length > 0) {
+        clearArenaFillBots();
+        showToast('Real player connected! Fill-in bots removed.');
+        return;
+      }
+
+      const pvpStatusEl = document.getElementById('arena-pvp-status');
+      if (pvpStatusEl) {
+        pvpStatusEl.textContent = 'FILL-IN BOTS ACTIVE (UNRANKED • NO REAL PLAYER FOUND)';
+        pvpStatusEl.className = 'text-[8px] font-black text-amber-300 uppercase tracking-wider mt-0.5';
+      }
+
+      for (const bot of arenaFillBots) {
+        if (bot.hp <= 0) continue;
+        if (bot.attackCooldown > 0) bot.attackCooldown = Math.max(0, bot.attackCooldown - dt);
+        if (bot.attackTimer > 0) bot.attackTimer = Math.max(0, bot.attackTimer - dt);
+
+        bot.decisionTimer -= dt;
+        if (bot.decisionTimer <= 0) {
+          bot.decisionTimer = 0.7 + Math.random() * 0.9;
+          bot.strafeDir = Math.random() < 0.5 ? -1 : 1;
+          bot.blocking = Math.random() < 0.24;
+        }
+
+        let targetPos = null;
+        let targetIsLocalPlayer = false;
+        let bestDist = Infinity;
+
+        if (bot.team === 'red' && state.hp > 0) {
+          const d = bot.pos.distanceTo(state.pos);
+          if (d < bestDist) {
+            bestDist = d;
+            targetPos = state.pos;
+            targetIsLocalPlayer = true;
+          }
+        }
+
+        for (const other of arenaFillBots) {
+          if (other === bot || other.team === bot.team || other.hp <= 0) continue;
+          const d = bot.pos.distanceTo(other.pos);
+          if (d < bestDist) {
+            bestDist = d;
+            targetPos = other.pos;
+            targetIsLocalPlayer = false;
+          }
+        }
+
+        let moveSpeed = 0;
+        const wep = getItemById(bot.equipped[bot.activeSlot]) || CATALOG.main[0];
+        const desiredRange = wep.grip === 'ranged' ? 14.0 : Math.max(2.3, wep.range - 0.5);
+
+        if (targetPos) {
+          const toTarget = new THREE.Vector3().subVectors(targetPos, bot.pos);
+          toTarget.y = 0;
+          const dist = toTarget.length();
+          if (dist > 0.01) {
+            bot.yaw = Math.atan2(-toTarget.x, -toTarget.z);
+            toTarget.normalize();
+          }
+
+          if (dist > desiredRange) {
+            bot.blocking = false;
+            moveSpeed = bot.moveSpeed;
+            bot.pos.x += toTarget.x * moveSpeed * dt;
+            bot.pos.z += toTarget.z * moveSpeed * dt;
+          } else {
+            const strafeVec = new THREE.Vector3(-toTarget.z * bot.strafeDir, 0, toTarget.x * bot.strafeDir);
+            moveSpeed = bot.moveSpeed * 0.45;
+            bot.pos.x += strafeVec.x * moveSpeed * dt;
+            bot.pos.z += strafeVec.z * moveSpeed * dt;
+
+            if (bot.attackCooldown <= 0 && !bot.blocking) {
+              bot.attackTimer = 0.3;
+              bot.attackCooldown = wep.cd + 0.35;
+              if (wep.grip === 'ranged') {
+                const dir = toTarget.clone();
+                dir.y = 0.02;
+                spawnArrowProjectile(
+                  bot.pos.clone().add(new THREE.Vector3(0, 1.45, 0)).addScaledVector(toTarget, 0.7),
+                  dir,
+                  bot.team,
+                  Math.max(8, Math.round(wep.dmg * 0.75)),
+                  null
+                );
+              } else {
+                spawnSlashArcEffect(bot.pos, bot.yaw, wep.color, 0, wep.grip);
+                const dmg = Math.max(7, Math.round(wep.dmg * 0.72));
+                if (targetIsLocalPlayer) {
+                  applyPvpDamageToLocalPlayer(dmg, null, bot.name);
+                } else {
+                  for (const other of arenaFillBots) {
+                    if (other !== bot && other.team !== bot.team && other.pos.distanceTo(bot.pos) <= wep.range + 0.6) {
+                      damageFillInBot(other, dmg);
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        const rDist = Math.hypot(bot.pos.x, bot.pos.z);
+        if (rDist > 25.8) {
+          bot.pos.x = (bot.pos.x / rDist) * 25.8;
+          bot.pos.z = (bot.pos.z / rDist) * 25.8;
+        }
+        resolveObstacleCollisions(bot.pos, 0.58);
+
+        bot.rig.root.position.copy(bot.pos);
+        bot.rig.root.rotation.y = bot.yaw + Math.PI;
+        animateWarriorRig(bot.rig, dt, {
+          speed: moveSpeed,
+          attackTimer: bot.attackTimer,
+          blocking: bot.blocking,
+          grip: wep.grip,
+          baseY: 0
+        });
       }
     }
 
     function useAbility(idx) {
-      if (state.abilityCooldowns[idx] > 0 || isAnyModalOpen()) return;
-      const ab = getItemById(profile.abilities[idx]);
-      if (!ab) return;
+      if (isAnyModalOpen()) return;
+      const abId = profile.abilities[idx];
+      const ab = getItemById(abId);
+      if (!ab || state.abilityCooldowns[idx] > 0) return;
 
       state.abilityCooldowns[idx] = ab.cd;
+
       if (ab.id === 'shadow_dash') {
-        state.dashTimer = 0.24;
+        state.dashTimer = 0.28;
         AudioFX.play('swing');
-        showToast('💨 Shadow Dash!');
+        showToast('⚡ Shadow Dash!');
       } else if (ab.id === 'berserk_roar') {
         state.berserkTimer = 5.0;
         AudioFX.play('hit');
         showToast('🔥 Forge Fury (+45% DMG for 5s)!');
       } else if (ab.id === 'whirlwind') {
-        state.attackTimer = 0.34;
         AudioFX.play('swing');
-        spawnSlashArcEffect(state.pos, state.yaw, 0xfbbf24, 2, '2h');
+        const wep = getItemById(profile.equipped[state.activeSlot]) || CATALOG.main[0];
+        const cleaveDmg = Math.round(wep.dmg * 1.25 * (state.berserkTimer > 0 ? 1.45 : 1.0));
+        spawnSlashArcEffect(state.pos, state.yaw, 0xfbbf24, 1, '2h');
+        spawnSlashArcEffect(state.pos, state.yaw + Math.PI, 0x38bdf8, 2, '2h');
+
         if (mpChannel) {
           try {
             mpChannel.postMessage({
@@ -2767,81 +3115,116 @@
               attackerName: profile.name,
               pos: { x: state.pos.x, y: state.pos.y, z: state.pos.z },
               yaw: state.yaw,
-              range: 4.5,
-              dmg: 34,
               color: 0xfbbf24,
-              comboStep: 2,
+              comboStep: 1,
               grip: '2h',
+              range: 4.4,
+              dmg: cleaveDmg,
               aoe: true
             });
           } catch (e) {}
         }
-        showToast('🌪️ Whirlwind Cleave!');
+
+        if (state.screen === 'arena') {
+          for (const entry of remotePlayerRigs.values()) {
+            if (entry.rig && entry.rig.root.position.distanceTo(state.pos) <= 4.6) {
+              AudioFX.play('hit');
+              spawnFloatingDamage(entry.rig.root.position, cleaveDmg, 'text-amber-300', '-');
+            }
+          }
+          for (const bot of arenaFillBots) {
+            if (bot.hp > 0 && bot.pos.distanceTo(state.pos) <= 4.6) {
+              damageFillInBot(bot, cleaveDmg);
+            }
+          }
+        }
       }
       updateHUD();
     }
 
-    // =========================================================================
-    // 9. MATCHMAKING QUEUE & MULTIPLAYER ARENA
-    // =========================================================================
     function queueForMatch(modeId, title) {
       if (state.screen !== 'hub') return;
-      state.queue = { modeId, title, timer: 2.5 };
-      const banner = document.getElementById('queue-banner');
-      const text = document.getElementById('queue-text');
-      if (banner && text) {
-        text.textContent = 'Searching ' + title + '... (3s)';
-        banner.classList.remove('hidden');
-      }
-      showToast('⚔️ Queued for ' + title + '!');
+      state.queue = {
+        modeId,
+        title,
+        elapsed: 0,
+        maxWait: 30,
+        connecting: false
+      };
+      document.getElementById('queue-banner').classList.remove('hidden');
+      document.getElementById('queue-text').textContent =
+        'Searching ' + title + '... (0s / 30s — Waiting for real players)';
+      syncLocalRealPlayerEntry();
+      showToast('Joined ' + title + ' queue — waiting up to 30s for real players...');
     }
 
     function cancelQueue() {
       state.queue = null;
-      const banner = document.getElementById('queue-banner');
-      if (banner) banner.classList.add('hidden');
-      showToast('Matchmaking cancelled.');
+      document.getElementById('queue-banner').classList.add('hidden');
+      syncLocalRealPlayerEntry();
     }
 
-    function startArenaMatch(modeId, title) {
+    function triggerProximityInteract() {
+      if (state.screen === 'hub' && state.proximityTarget && !isAnyModalOpen()) {
+        state.proximityTarget.action();
+      }
+    }
+
+    function startArenaMatch(modeId, title, useFillBots = false) {
       state.queue = null;
       document.getElementById('queue-banner').classList.add('hidden');
       document.getElementById('interact-prompt').classList.add('hidden');
 
-      const mapByMode = {
-        '1v1': 'obsidian',
-        '2v2': 'frostspire',
-        '3v3': 'shogun',
-        '4v4': 'sunken_ruins',
-        'ffa': 'celestial_spire'
-      };
-      const chosenMap = mapByMode[modeId] || 'obsidian';
+      const mapKeys = ['obsidian', 'frostspire', 'shogun', 'sunken_ruins', 'celestial_spire'];
+      const chosenMap = mapKeys[Math.floor(Math.random() * mapKeys.length)];
       const mapDisplayName = buildArenaMap(chosenMap);
 
-      const teamSizeMap = { '1v1': 1, '2v2': 2, '3v3': 3, '4v4': 4, 'ffa': 1 };
       state.screen = 'arena';
+      state.matchMode = modeId;
       state.blueScore = 0;
       state.redScore = 0;
       state.matchKills = 0;
+      state.usedFillBots = useFillBots;
       state.matchConfig = {
         modeId,
         title,
-        teamSize: teamSizeMap[modeId] || 1,
-        targetWins: 3,
-        roundNum: 0,
+        targetWins: modeId === '1v1' ? 3 : 5,
         roundTime: 120,
         roundEnding: false
       };
 
-      const livePeers = getActiveRemotePlayers('arena');
+      const stats = computeStats();
+      state.hp = stats.maxHp;
+      state.stamina = stats.maxStamina;
+      state.pos.set(0, 0, 20);
+      state.velY = 0;
+      state.grounded = true;
+      state.yaw = 0;
+      state.pitch = 0.14;
+      state.blocking = false;
+      state.emoteId = null;
+
+      entityGroup.clear();
+      fxGroup.clear();
+      remotePlayerRigs.clear();
+      projectiles = [];
+      slashEffects = [];
+      clearArenaFillBots();
+
+      if (useFillBots) {
+        spawnFillInBotsForMode(modeId);
+      }
+
+      rebuildLocalWarrior();
+
       const pvpStatusEl = document.getElementById('arena-pvp-status');
       if (pvpStatusEl) {
-        if (livePeers.length > 0) {
-          pvpStatusEl.textContent = 'LIVE MULTIPLAYER (' + (livePeers.length + 1) + ' IN ARENA)';
-          pvpStatusEl.className = 'text-[8px] font-black text-emerald-300 uppercase tracking-wider mt-0.5';
+        if (useFillBots) {
+          pvpStatusEl.textContent = 'FILL-IN BOTS ACTIVE (UNRANKED • NO REAL PLAYER FOUND)';
+          pvpStatusEl.className = 'text-[8px] font-black text-amber-300 uppercase tracking-wider mt-0.5';
         } else {
-          pvpStatusEl.textContent = 'ARENA OPEN — WAITING FOR PLAYERS';
-          pvpStatusEl.className = 'text-[8px] font-black text-sky-300 uppercase tracking-wider mt-0.5';
+          pvpStatusEl.textContent = 'LIVE MULTIPLAYER';
+          pvpStatusEl.className = 'text-[8px] font-black text-emerald-300 uppercase tracking-wider mt-0.5';
         }
       }
 
@@ -2851,123 +3234,79 @@
       document.getElementById('blue-score').textContent = '0';
       document.getElementById('red-score').textContent = '0';
 
-      const hintBar = document.getElementById('hotbar-hint-bar');
-      if (hintBar) {
-        hintBar.innerHTML = [
-          '<span>[LMB] Attack</span>',
-          '<span>[RMB] Shield Block</span>',
-          '<span>[1/2/3] Weapons</span>',
-          '<span>[Q/E/R] Abilities</span>',
-          '<span>[MOUSE] Look</span>'
-        ].join('');
-      }
-
-      rebuildLocalWarrior();
       syncLocalRealPlayerEntry();
-      startNewRound();
-    }
-
-    function startNewRound() {
-      entityGroup.clear();
-      fxGroup.clear();
-      remotePlayerRigs.clear();
-      projectiles = [];
-      slashEffects = [];
-
-      const stats = computeStats();
-      state.hp = stats.maxHp;
-      state.stamina = stats.maxStamina;
-      state.pos.set(0, 0, 18);
-      state.velY = 0;
-      state.grounded = true;
-      state.yaw = 0;
-      state.pitch = 0.14;
-      state.blocking = false;
-      state.comboCount = 0;
-      state.comboTimer = 0;
-      state.dashTimer = 0;
-      state.berserkTimer = 0;
-      state.attackTimer = 0;
-      state.attackCooldown = 0;
-      state.attackCooldownMax = 0;
-      state.emoteId = null;
-      state.emoteTimer = 0;
-      state.abilityCooldowns = [0, 0, 0];
-      state.matchConfig.roundNum = (state.matchConfig.roundNum || 0) + 1;
-      state.matchConfig.roundTime = 120;
-      state.matchConfig.roundEnding = false;
-
-      if (localWarriorRig) {
-        localWarriorRig.root.position.copy(state.pos);
-        localWarriorRig.root.rotation.y = state.yaw + Math.PI;
-      }
-
-      const realPeers = getActiveRemotePlayers('arena');
       updateHUD();
-      if (realPeers.length > 0) {
-        showToast('⚔️ Live PvP Round ' + state.matchConfig.roundNum + ' vs ' + realPeers[0].name + '!');
-      } else {
-        showToast('⚔️ Arena Live — Waiting for real challengers to join!');
-      }
+      showToast(useFillBots
+        ? 'No real player joined in 30s — Fill-In Bots deployed!'
+        : 'Real-Player Match Started in ' + mapDisplayName + '!');
     }
 
-    function finishArenaMatch(won) {
-      const cfg = state.matchConfig;
-      const earnedCoins = won ? 85 : 30;
-      const earnedXp = won ? 120 : 45;
-      profile.coins += earnedCoins;
-      profile.xp += earnedXp;
-      if (won) {
+    function finishArenaMatch(playerWon) {
+      if (state.screen !== 'arena') return;
+      exitGamePointerLock();
+      state.blocking = false;
+
+      const baseCoins = playerWon ? 85 : 30;
+      const baseXp = playerWon ? 120 : 45;
+      profile.coins += baseCoins;
+      profile.xp += baseXp;
+
+      if (playerWon && !state.usedFillBots) {
         profile.wins += 1;
         advanceQuest('q2', 1);
+      } else if (playerWon) {
+        advanceQuest('q2', 1);
       }
+
       while (profile.xp >= profile.xpNext) {
         profile.xp -= profile.xpNext;
         profile.level += 1;
         profile.xpNext = Math.round(profile.xpNext * 1.25);
-        profile.skillPoints += 1;
-        showToast('⭐ Level Up! You are now Level ' + profile.level + '!');
+        showToast('🎉 LEVEL UP! You are now Level ' + profile.level + '!');
       }
 
-      syncLocalRealPlayerEntry();
-      AudioFX.play('victory');
-      exitGamePointerLock();
+      if (playerWon) AudioFX.play('victory');
 
-      document.getElementById('finish-title').textContent = won ? '🏆 ARENA VICTORY!' : '⚔️ HARD-FOUGHT DUEL';
-      document.getElementById('finish-subtitle').textContent = (cfg ? cfg.title : 'ARENA') + ' • Final Score ' + state.blueScore + ' - ' + state.redScore;
-      document.getElementById('finish-coins').textContent = '+' + earnedCoins + ' 🪙';
-      document.getElementById('finish-xp').textContent = '+' + earnedXp + ' XP';
-      document.getElementById('finish-kills').textContent = profile.kills + ' ⚔️';
+      document.getElementById('finish-title').textContent = playerWon ? '🏆 ARENA VICTORY!' : '⚔️ MATCH COMPLETE';
+      document.getElementById('finish-subtitle').textContent =
+        (state.matchConfig ? state.matchConfig.title : 'ARENA') +
+        ' • Final Score ' + state.blueScore + ' - ' + state.redScore +
+        (state.usedFillBots ? ' (Fill-In Bot Practice)' : '');
+      document.getElementById('finish-coins').textContent = '+' + baseCoins + ' 🪙';
+      document.getElementById('finish-xp').textContent = '+' + baseXp + ' XP';
+      document.getElementById('finish-kills').textContent = state.matchKills + ' ⚔️';
 
-      state.podiumEmoteId = profile.emotes[0] || 'salute';
-      renderVictoryEmoteChoices();
-      document.getElementById('match-finished-modal').classList.remove('hidden');
+      const choicesEl = document.getElementById('victory-emote-choices');
+      choicesEl.innerHTML = '';
+      CATALOG.emote.filter(em => profile.owned.includes(em.id)).forEach(em => {
+        const btn = document.createElement('button');
+        btn.className = 'px-2.5 py-1.5 rounded-xl text-[11px] font-black border transition ' +
+          (state.podiumEmoteId === em.id
+            ? 'bg-pink-500/25 border-pink-400 text-pink-200'
+            : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-500');
+        btn.textContent = em.name;
+        btn.onclick = () => selectVictoryEmote(em.id);
+        choicesEl.appendChild(btn);
+      });
+
+      const currentEmote = getItemById(state.podiumEmoteId) || CATALOG.emote[0];
+      document.getElementById('podium-emote-name').textContent = currentEmote.name;
+
+      openModal('match-finished-modal');
+      initPodiumRenderer();
       rebuildPodiumRig();
       updateHUD();
-    }
-
-    function playAgainFromFinish() {
-      const lastMode = state.matchConfig ? state.matchConfig.modeId : '1v1';
-      const lastTitle = state.matchConfig ? state.matchConfig.title : '1V1 DUEL';
-      document.getElementById('match-finished-modal').classList.add('hidden');
-      startArenaMatch(lastMode, lastTitle);
-    }
-
-    function closeMatchFinishedToHub() {
-      document.getElementById('match-finished-modal').classList.add('hidden');
-      returnToHub();
+      syncLocalRealPlayerEntry();
     }
 
     function returnToHub() {
       state.screen = 'hub';
-      state.matchConfig = null;
       state.queue = null;
+      state.matchConfig = null;
       state.blocking = false;
-      state.comboCount = 0;
-      state.comboTimer = 0;
-      state.attackTimer = 0;
-      state.attackCooldown = 0;
       state.emoteId = null;
+
+      clearArenaFillBots();
       projectiles = [];
       slashEffects = [];
 
@@ -2983,53 +3322,81 @@
       document.getElementById('arena-scoreboard').classList.add('hidden');
       document.getElementById('queue-banner').classList.add('hidden');
 
-      const hintBar = document.getElementById('hotbar-hint-bar');
-      if (hintBar) {
-        hintBar.innerHTML = [
-          '<span>[WASD] Move</span>',
-          '<span>[SHIFT] Sprint</span>',
-          '<span>[SPACE] Jump</span>',
-          '<span>[MOUSE] Look</span>',
-          '<span>[F] Interact</span>',
-          "<span>[B] Sam's Forge</span>",
-          '<span>[C] Armory</span>',
-          '<span>[G] Emotes</span>'
-        ].join('');
-      }
-
       buildGrandForgeHub();
       rebuildLocalWarrior();
+      updateHubLeaderboardTexture();
       syncLocalRealPlayerEntry();
       updateHUD();
     }
 
     // =========================================================================
-    // 10. SAM'S SHOP, ARMORY (OWNED ONLY), PODIUM, EMOTES, QUESTS & SETTINGS
+    // 10. SAM'S SHOP, ARMORY, 3D PREVIEW/PODIUM, EMOTES, QUESTS & SETTINGS
     // =========================================================================
     function generateShopStock() {
-      const pools = [
-        ...CATALOG.main.filter(i => i.price > 0),
-        ...CATALOG.close.filter(i => i.price > 0),
-        ...CATALOG.ranged.filter(i => i.price > 0),
-        ...CATALOG.shield.filter(i => i.price > 0),
-        ...CATALOG.armour.filter(i => i.price > 0),
-        ...CATALOG.aura.filter(i => i.price > 0),
-        ...CATALOG.emote.filter(i => i.price > 0)
-      ];
-      const shuffled = [...pools].sort(() => Math.random() - 0.5);
-      state.shopStock = shuffled.slice(0, 6);
+      const purchasable = [];
+      ['main', 'close', 'ranged', 'shield', 'armour', 'aura', 'emote'].forEach(cat => {
+        CATALOG[cat].forEach(item => {
+          if (item.price > 0) purchasable.push(item);
+        });
+      });
+      for (let i = purchasable.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [purchasable[i], purchasable[j]] = [purchasable[j], purchasable[i]];
+      }
+      state.shopStock = purchasable.slice(0, 6);
     }
 
     function openSamsShop() {
-      exitGamePointerLock();
       if (state.shopStock.length === 0) generateShopStock();
       renderSamsShop();
-      document.getElementById('shop-modal').classList.remove('hidden');
+      openModal('shop-modal');
+    }
+
+    function renderSamsShop() {
+      const grid = document.getElementById('shop-items-grid');
+      if (!grid) return;
+      grid.innerHTML = '';
+
+      state.shopStock.forEach(item => {
+        const owned = profile.owned.includes(item.id);
+        const rarityStyle = RARITY_COLORS[item.rarity] || RARITY_COLORS.Common;
+        const statLine = item.dmg
+          ? `⚔️ ${item.dmg} DMG • ${item.cd}s CD`
+          : item.blockPct
+            ? `🛡️ ${Math.round(item.blockPct * 100)}% Block Reduction`
+            : item.hpBonus !== undefined
+              ? `❤️ +${item.hpBonus} HP • ⚡ +${item.speedBonus} SPD`
+              : (item.desc || 'Cosmetic Forge Unlock');
+
+        const card = document.createElement('div');
+        card.className = `rounded-2xl p-3.5 border flex flex-col justify-between gap-2.5 ${rarityStyle}`;
+        card.innerHTML = `
+          <div class="flex items-center gap-3">
+            <div class="w-12 h-12 rounded-xl bg-slate-950/80 p-2 border border-slate-700/80 shrink-0">
+              ${getItemSVG(item.id)}
+            </div>
+            <div class="min-w-0">
+              <div class="text-[10px] font-black uppercase tracking-wider opacity-85">${item.rarity} • ${item.category}</div>
+              <div class="text-sm font-black text-white truncate">${item.name}</div>
+              <div class="text-[11px] font-semibold text-slate-300 mt-0.5">${statLine}</div>
+            </div>
+          </div>
+          <button onclick="buyShopItem('${item.id}')" ${owned ? 'disabled' : ''}
+            class="w-full py-2 rounded-xl font-black text-xs transition ${
+              owned
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 cursor-default'
+                : 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md'
+            }">
+            ${owned ? '✓ OWNED' : `FORGE UNLOCK (${item.currency === 'diamonds' ? '💎 ' : '🪙 '}${item.price})`}
+          </button>
+        `;
+        grid.appendChild(card);
+      });
     }
 
     function rerollSamsShop() {
       if (profile.coins < 40) {
-        showToast('🪙 Need 40 Coins to reroll Sam’s Forge!');
+        showToast('Not enough Coins to reroll (Need 40 🪙)');
         return;
       }
       profile.coins -= 40;
@@ -3037,65 +3404,22 @@
       generateShopStock();
       renderSamsShop();
       updateHUD();
-    }
-
-    function renderSamsShop() {
-      const grid = document.getElementById('shop-items-grid');
-      if (!grid) return;
-      grid.innerHTML = state.shopStock.map(item => {
-        const owned = profile.owned.includes(item.id);
-        const rarityCls = RARITY_COLORS[item.rarity] || RARITY_COLORS.Common;
-        const priceLabel = item.currency === 'diamonds' ? ('💎 ' + item.price) : ('🪙 ' + item.price);
-        const statText = item.dmg
-          ? ('⚔️ ' + item.dmg + ' DMG')
-          : item.blockPct
-            ? ('🛡️ +' + Math.round(item.blockPct * 100) + '% Block')
-            : item.hpBonus
-              ? ('❤️ +' + item.hpBonus + ' HP')
-              : (item.desc || 'Cosmetic Style');
-        const btnLabel = owned ? '✓ OWNED' : ('UNLOCK (' + priceLabel + ')');
-        const btnClass = owned
-          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 cursor-default'
-          : 'bg-amber-500 hover:bg-amber-400 text-slate-950';
-
-        return `
-          <div class="rounded-2xl p-3.5 border ${rarityCls} flex flex-col justify-between gap-2.5">
-            <div>
-              <div class="flex items-center justify-between text-[10px] font-black uppercase">
-                <span>${item.rarity}</span>
-                <span class="opacity-75">${item.category}</span>
-              </div>
-              <div class="flex items-center gap-2.5 mt-2">
-                <div class="w-12 h-12 p-1.5 rounded-xl bg-slate-950/90 border border-slate-700/70 flex items-center justify-center shrink-0">
-                  ${getItemSVG(item.id)}
-                </div>
-                <div>
-                  <div class="text-xs font-black text-white">${item.name}</div>
-                  <div class="text-[11px] text-slate-300 mt-0.5">${statText}</div>
-                </div>
-              </div>
-            </div>
-            <button onclick="buyShopItem('${item.id}')" ${owned ? 'disabled' : ''}
-              class="w-full py-2 rounded-xl text-xs font-black transition ${btnClass}">
-              ${btnLabel}
-            </button>
-          </div>
-        `;
-      }).join('');
+      showToast('Sam forged a fresh stock!');
     }
 
     function buyShopItem(itemId) {
       const item = getItemById(itemId);
       if (!item || profile.owned.includes(itemId)) return;
+
       if (item.currency === 'diamonds') {
         if (profile.diamonds < item.price) {
-          showToast('💎 Not enough Diamonds!');
+          showToast('Not enough Diamonds (Need ' + item.price + ' 💎)');
           return;
         }
         profile.diamonds -= item.price;
       } else {
         if (profile.coins < item.price) {
-          showToast('🪙 Not enough Coins!');
+          showToast('Not enough Coins (Need ' + item.price + ' 🪙)');
           return;
         }
         profile.coins -= item.price;
@@ -3104,16 +3428,12 @@
       profile.owned.push(item.id);
       if (item.category === 'emote' && !profile.emotes.includes(item.id)) {
         profile.emotes.push(item.id);
-      } else if (['main', 'close', 'ranged', 'shield', 'armour', 'aura'].includes(item.category)) {
-        profile.equipped[item.category] = item.id;
-        rebuildLocalWarrior();
       }
-      advanceQuest('q3', 1);
-
       AudioFX.play('coin');
-      showToast('✨ Unlocked ' + item.name + '!');
+      advanceQuest('q3', 1);
       renderSamsShop();
       updateHUD();
+      showToast('Unlocked ' + item.name + '!');
     }
 
     let previewRenderer = null;
@@ -3121,155 +3441,77 @@
     let previewCamera = null;
     let previewRig = null;
 
-    function ensurePreviewSetup() {
+    function initPreviewRenderer() {
       const pCanvas = document.getElementById('preview-canvas');
       if (!pCanvas) return;
       if (!previewRenderer) {
         previewRenderer = new THREE.WebGLRenderer({ canvas: pCanvas, antialias: true, alpha: true });
         previewRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         previewScene = new THREE.Scene();
-        previewCamera = new THREE.PerspectiveCamera(42, 1.3, 0.1, 30);
-        previewCamera.position.set(0, 1.45, 3.8);
-        previewCamera.lookAt(0, 1.15, 0);
+        previewCamera = new THREE.PerspectiveCamera(42, 1.4, 0.1, 40);
+        previewCamera.position.set(0, 1.55, 4.1);
+        previewCamera.lookAt(0, 1.25, 0);
 
-        const amb = new THREE.AmbientLight(0xe2e8f0, 1.0);
-        const key = new THREE.DirectionalLight(0xfffbeb, 1.45);
-        key.position.set(3, 5, 4);
+        const hemi = new THREE.HemisphereLight(0xe0f2fe, 0x0f172a, 1.15);
+        const dir = new THREE.DirectionalLight(0xffffff, 1.3);
+        dir.position.set(3, 6, 4);
         const ped = new THREE.Mesh(
-          new THREE.CylinderGeometry(1.05, 1.2, 0.16, 8),
-          polyMat(0x1e293b, { metalness: 0.75, roughness: 0.28 })
+          new THREE.CylinderGeometry(1.15, 1.3, 0.18, 16),
+          polyMat(0x1e293b, { metalness: 0.6, roughness: 0.35 })
         );
-        ped.position.y = -0.08;
-        previewScene.add(amb, key, ped);
+        ped.position.y = -0.09;
+        previewScene.add(hemi, dir, ped);
       }
-      const w = Math.max(220, pCanvas.clientWidth || 280);
-      const h = Math.max(200, pCanvas.clientHeight || 240);
-      previewRenderer.setSize(w, h, false);
+      const rect = pCanvas.getBoundingClientRect();
+      const w = Math.max(240, rect.width || 320);
+      const h = Math.max(180, rect.height || 230);
       previewCamera.aspect = w / h;
       previewCamera.updateProjectionMatrix();
+      previewRenderer.setSize(w, h, false);
     }
 
     function rebuildPreviewRig() {
-      ensurePreviewSetup();
       if (!previewScene) return;
       if (previewRig) previewScene.remove(previewRig.root);
       const merged = { ...profile.equipped, ...state.previewOverride };
-      const previewSlot = ['main', 'close', 'ranged'].includes(state.armoryTab) ? state.armoryTab : state.activeSlot;
-      previewRig = buildWarriorRig(merged, previewSlot, false);
-      previewScene.add(previewRig.root);
-
+      const previewSlot = ['main', 'close', 'ranged'].includes(state.armoryTab)
+        ? state.armoryTab
+        : state.activeSlot;
       const wep = getItemById(merged[previewSlot]) || CATALOG.main[0];
       const gripBadge = document.getElementById('preview-grip-label');
       if (gripBadge) {
-        gripBadge.textContent = wep.grip === '2h' ? '2-HANDED GRIP' : wep.grip === 'dual' ? 'DUAL WIELDING' : '1H + SHIELD';
+        gripBadge.textContent = wep.grip === '1h' ? '1H + SHIELD' : wep.grip.toUpperCase();
       }
+      previewRig = buildWarriorRig(merged, previewSlot, false);
+      previewScene.add(previewRig.root);
     }
 
     function openArmory(tab = 'main') {
-      exitGamePointerLock();
       state.armoryTab = tab;
       state.previewOverride = {};
-      document.getElementById('armory-modal').classList.remove('hidden');
-      renderArmoryTabs();
-      renderArmoryGrid();
+      openModal('armory-modal');
+      initPreviewRenderer();
       rebuildPreviewRig();
+      renderArmory();
     }
 
     function selectArmoryTab(tab) {
       state.armoryTab = tab;
-      renderArmoryTabs();
-      renderArmoryGrid();
+      state.previewOverride = {};
       rebuildPreviewRig();
-    }
-
-    function renderArmoryTabs() {
-      const tabs = [
-        { id: 'main', label: '🗡️ Main' },
-        { id: 'close', label: '🔪 Close' },
-        { id: 'ranged', label: '🏹 Ranged' },
-        { id: 'shield', label: '🛡️ Shields' },
-        { id: 'armour', label: '🥋 Armour' },
-        { id: 'aura', label: '✨ Auras' },
-        { id: 'ability', label: '⚡ Abilities' },
-        { id: 'emote', label: '💃 Emotes' }
-      ];
-      const wrap = document.getElementById('armory-tabs');
-      if (!wrap) return;
-      wrap.innerHTML = tabs.map(t => {
-        const cls = state.armoryTab === t.id
-          ? 'bg-sky-500 text-slate-950'
-          : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700';
-        return '<button onclick="selectArmoryTab(\'' + t.id + '\')" class="px-2.5 py-1.5 rounded-xl text-[11px] font-black transition ' + cls + '">' + t.label + '</button>';
-      }).join('');
-    }
-
-    function renderArmoryGrid() {
-      const grid = document.getElementById('armory-content-grid');
-      if (!grid) return;
-      const list = (CATALOG[state.armoryTab] || []).filter(item => profile.owned.includes(item.id));
-      grid.innerHTML = list.map(item => {
-        const equipped = item.category === 'ability'
-          ? profile.abilities.includes(item.id)
-          : item.category === 'emote'
-            ? profile.emotes.includes(item.id)
-            : profile.equipped[item.category] === item.id;
-        const rarityCls = RARITY_COLORS[item.rarity] || RARITY_COLORS.Common;
-        const gripTag = item.grip
-          ? ('<span class="uppercase opacity-75">' + (item.grip === 'shield_item' ? 'OFF-HAND' : item.grip) + '</span>')
-          : '';
-        const statLine = item.dmg
-          ? (item.dmg + ' DMG • ' + item.cd + 's CD')
-          : item.blockPct
-            ? ('+' + Math.round(item.blockPct * 100) + '% Block')
-            : item.hpBonus !== undefined
-              ? ('+' + item.hpBonus + ' HP')
-              : (item.desc || '');
-        const btnCls = equipped
-          ? 'bg-emerald-500 text-slate-950'
-          : 'bg-sky-500/25 hover:bg-sky-500/40 text-sky-200 border border-sky-400/50';
-        const btnText = equipped ? '✓ EQUIPPED' : 'EQUIP';
-
-        return `
-          <div onmouseenter="previewArmoryHover('${item.id}')"
-            class="rounded-2xl p-3 border ${rarityCls} flex flex-col justify-between gap-2 transition">
-            <div>
-              <div class="flex items-center justify-between text-[10px] font-black">
-                <span>${item.rarity}</span>
-                ${gripTag}
-              </div>
-              <div class="flex items-center gap-2.5 mt-1.5">
-                <div class="w-11 h-11 p-1.5 rounded-xl bg-slate-950/90 border border-slate-700/70 flex items-center justify-center shrink-0">
-                  ${getItemSVG(item.id)}
-                </div>
-                <div>
-                  <div class="text-xs font-black text-white">${item.name}</div>
-                  <div class="text-[10px] text-slate-300">${statLine}</div>
-                </div>
-              </div>
-            </div>
-            <button onclick="equipArmoryItem('${item.id}')"
-              class="w-full py-1.5 rounded-xl text-[11px] font-black transition ${btnCls}">
-              ${btnText}
-            </button>
-          </div>
-        `;
-      }).join('');
+      renderArmory();
     }
 
     function previewArmoryHover(itemId) {
       const item = getItemById(itemId);
-      if (!item || !profile.owned.includes(item.id)) return;
+      if (!item) return;
       if (item.category === 'emote') {
         state.previewEmoteId = item.id;
-        state.previewEmoteTimer = 2.4;
+        state.previewEmoteTimer = 2.2;
       } else if (['main', 'close', 'ranged', 'shield', 'armour', 'aura'].includes(item.category)) {
         state.previewOverride[item.category] = item.id;
         rebuildPreviewRig();
       }
-    }
-
-    function triggerPreviewSwing() {
-      state.previewSwingTimer = 0.34;
     }
 
     function resetPreviewOverride() {
@@ -3278,33 +3520,105 @@
       rebuildPreviewRig();
     }
 
+    function triggerPreviewSwing() {
+      state.previewSwingTimer = 0.3;
+      AudioFX.play('swing');
+    }
+
+    function renderArmory() {
+      const tabsEl = document.getElementById('armory-tabs');
+      const gridEl = document.getElementById('armory-content-grid');
+      if (!tabsEl || !gridEl) return;
+
+      const tabs = [
+        { id: 'main', label: 'Main' },
+        { id: 'close', label: 'Close' },
+        { id: 'ranged', label: 'Ranged' },
+        { id: 'shield', label: 'Shields' },
+        { id: 'armour', label: 'Armour' },
+        { id: 'aura', label: 'Auras' },
+        { id: 'ability', label: 'Abilities' },
+        { id: 'emote', label: 'Emotes' }
+      ];
+
+      tabsEl.innerHTML = '';
+      tabs.forEach(t => {
+        const btn = document.createElement('button');
+        btn.className = state.armoryTab === t.id
+          ? 'px-2.5 py-1.5 rounded-xl bg-sky-500 text-slate-950 font-black text-xs transition'
+          : 'px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold text-xs border border-slate-700/80 transition';
+        btn.textContent = t.label;
+        btn.onclick = () => selectArmoryTab(t.id);
+        tabsEl.appendChild(btn);
+      });
+
+      gridEl.innerHTML = '';
+      const ownedItems = (CATALOG[state.armoryTab] || []).filter(item => profile.owned.includes(item.id));
+
+      ownedItems.forEach(item => {
+        const isEquipped = item.category === 'ability'
+          ? profile.abilities.includes(item.id)
+          : item.category === 'emote'
+            ? state.podiumEmoteId === item.id
+            : profile.equipped[item.category] === item.id;
+
+        const rarityStyle = RARITY_COLORS[item.rarity] || RARITY_COLORS.Common;
+        const card = document.createElement('div');
+        card.onmouseenter = () => previewArmoryHover(item.id);
+        card.className = `rounded-2xl p-3 border flex flex-col justify-between gap-2 transition ${rarityStyle}`;
+        card.innerHTML = `
+          <div class="flex items-center gap-2.5">
+            <div class="w-10 h-10 rounded-xl bg-slate-950/80 p-1.5 border border-slate-700/80 shrink-0">
+              ${getItemSVG(item.id)}
+            </div>
+            <div class="min-w-0">
+              <div class="text-[9px] font-black uppercase tracking-wider opacity-80">${item.rarity}</div>
+              <div class="text-xs font-black text-white truncate">${item.name}</div>
+              <div class="text-[10px] text-slate-300 truncate">
+                ${item.dmg ? `${item.dmg} DMG • ${item.cd}s CD` : item.blockPct ? `${Math.round(item.blockPct * 100)}% Block` : item.hpBonus !== undefined ? `+${item.hpBonus} HP` : (item.desc || 'Unlocked')}
+              </div>
+            </div>
+          </div>
+          <button onclick="equipArmoryItem('${item.id}')"
+            class="w-full py-1.5 rounded-xl text-[11px] font-black transition ${
+              isEquipped
+                ? 'bg-sky-500/25 border border-sky-400 text-sky-200'
+                : 'bg-slate-800 hover:bg-slate-700 text-white'
+            }">
+            ${isEquipped ? '✓ EQUIPPED' : 'EQUIP'}
+          </button>
+        `;
+        gridEl.appendChild(card);
+      });
+    }
+
     function equipArmoryItem(itemId) {
       const item = getItemById(itemId);
-      if (!item || !profile.owned.includes(item.id)) return;
+      if (!item || !profile.owned.includes(itemId)) return;
 
-      if (item.category === 'ability') {
+      if (item.category === 'emote') {
+        state.podiumEmoteId = item.id;
+        triggerEmote(item.id);
+      } else if (item.category === 'ability') {
         if (!profile.abilities.includes(item.id)) {
-          profile.abilities.shift();
-          profile.abilities.push(item.id);
+          profile.abilities[0] = item.id;
         }
-      } else if (item.category === 'emote') {
-        if (!profile.emotes.includes(item.id)) {
-          profile.emotes.push(item.id);
-        }
-        state.previewEmoteId = item.id;
-        state.previewEmoteTimer = 2.8;
       } else {
         profile.equipped[item.category] = item.id;
         if (['main', 'close', 'ranged'].includes(item.category)) {
           state.activeSlot = item.category;
         }
-        state.previewOverride = {};
-        rebuildLocalWarrior();
-        rebuildPreviewRig();
       }
 
-      renderArmoryGrid();
+      state.previewOverride = {};
+      const stats = computeStats();
+      state.hp = Math.min(state.hp, stats.maxHp);
+      rebuildLocalWarrior();
+      rebuildPreviewRig();
+      renderArmory();
       updateHUD();
+      syncLocalRealPlayerEntry();
+      showToast('Equipped ' + item.name);
     }
 
     let podiumRenderer = null;
@@ -3312,156 +3626,177 @@
     let podiumCamera = null;
     let podiumRig = null;
 
-    function rebuildPodiumRig() {
-      const pCanvas = document.getElementById('podium-canvas');
-      if (!pCanvas) return;
+    function initPodiumRenderer() {
+      const podCanvas = document.getElementById('podium-canvas');
+      if (!podCanvas) return;
       if (!podiumRenderer) {
-        podiumRenderer = new THREE.WebGLRenderer({ canvas: pCanvas, antialias: true, alpha: true });
+        podiumRenderer = new THREE.WebGLRenderer({ canvas: podCanvas, antialias: true, alpha: true });
         podiumRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         podiumScene = new THREE.Scene();
-        podiumCamera = new THREE.PerspectiveCamera(42, 1.3, 0.1, 30);
-        podiumCamera.position.set(0, 1.5, 3.8);
-        podiumCamera.lookAt(0, 1.2, 0);
+        podiumCamera = new THREE.PerspectiveCamera(42, 1.4, 0.1, 40);
+        podiumCamera.position.set(0, 1.65, 4.2);
+        podiumCamera.lookAt(0, 1.25, 0);
 
-        const amb = new THREE.AmbientLight(0xfef3c7, 1.0);
-        const key = new THREE.DirectionalLight(0xfbbf24, 1.5);
-        key.position.set(3, 5, 4);
+        const hemi = new THREE.HemisphereLight(0xfef3c7, 0x0f172a, 1.2);
+        const dir = new THREE.DirectionalLight(0xfbbf24, 1.4);
+        dir.position.set(3, 6, 4);
         const ped = new THREE.Mesh(
-          new THREE.CylinderGeometry(1.15, 1.3, 0.2, 8),
-          polyMat(0xfbbf24, { metalness: 0.85, roughness: 0.2 })
+          new THREE.CylinderGeometry(1.2, 1.4, 0.24, 16),
+          polyMat(0xfbbf24, { metalness: 0.85, roughness: 0.25 })
         );
-        ped.position.y = -0.1;
-        podiumScene.add(amb, key, ped);
+        ped.position.y = -0.12;
+        podiumScene.add(hemi, dir, ped);
       }
-      const w = Math.max(220, pCanvas.clientWidth || 280);
-      const h = Math.max(190, pCanvas.clientHeight || 224);
-      podiumRenderer.setSize(w, h, false);
+      const rect = podCanvas.getBoundingClientRect();
+      const w = Math.max(220, rect.width || 300);
+      const h = Math.max(160, rect.height || 208);
       podiumCamera.aspect = w / h;
       podiumCamera.updateProjectionMatrix();
+      podiumRenderer.setSize(w, h, false);
+    }
 
+    function rebuildPodiumRig() {
+      if (!podiumScene) return;
       if (podiumRig) podiumScene.remove(podiumRig.root);
       podiumRig = buildWarriorRig(profile.equipped, state.activeSlot, false);
       podiumScene.add(podiumRig.root);
     }
 
-    function renderVictoryEmoteChoices() {
-      const wrap = document.getElementById('victory-emote-choices');
-      if (!wrap) return;
-      const unlockedEmotes = CATALOG.emote.filter(e => profile.owned.includes(e.id));
-      wrap.innerHTML = unlockedEmotes.map(em => {
-        const cls = state.podiumEmoteId === em.id
-          ? 'bg-pink-500/30 border-pink-400 text-white'
-          : 'bg-slate-900/90 border-slate-800 text-slate-300 hover:border-slate-600';
-        return '<button onclick="selectVictoryEmote(\'' + em.id + '\')" class="p-2 rounded-xl border text-left text-[11px] font-black transition flex items-center gap-2 ' + cls + '"><span class="w-6 h-6 shrink-0">' + getItemSVG(em.id) + '</span><span class="truncate">' + em.name + '</span></button>';
-      }).join('');
-    }
-
     function selectVictoryEmote(emoteId) {
       state.podiumEmoteId = emoteId;
       const em = getItemById(emoteId);
-      const label = document.getElementById('podium-emote-name');
-      if (label && em) label.textContent = em.name;
-      renderVictoryEmoteChoices();
+      if (em) document.getElementById('podium-emote-name').textContent = em.name;
+      const buttons = document.querySelectorAll('#victory-emote-choices button');
+      const unlocked = CATALOG.emote.filter(e => profile.owned.includes(e.id));
+      buttons.forEach((btn, idx) => {
+        const isSel = unlocked[idx] && unlocked[idx].id === emoteId;
+        btn.className = 'px-2.5 py-1.5 rounded-xl text-[11px] font-black border transition ' +
+          (isSel
+            ? 'bg-pink-500/25 border-pink-400 text-pink-200'
+            : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-500');
+      });
     }
 
-    function toggleEmoteWheel(force) {
+    function playAgainFromFinish() {
+      const modeId = state.matchMode || '1v1';
+      const title = state.matchConfig ? state.matchConfig.title : 'PUBLIC 1V1 DUEL';
+      closeModal('match-finished-modal');
+      returnToHub();
+      queueForMatch(modeId, title);
+    }
+
+    function closeMatchFinishedToHub() {
+      closeModal('match-finished-modal');
+      returnToHub();
+    }
+
+    function toggleEmoteWheel(forceState) {
       const overlay = document.getElementById('emote-wheel-overlay');
       if (!overlay) return;
-      const shouldOpen = typeof force === 'boolean' ? force : overlay.classList.contains('hidden');
+      const shouldOpen = forceState !== undefined ? forceState : overlay.classList.contains('hidden');
       if (shouldOpen) {
         exitGamePointerLock();
-        const unlocked = CATALOG.emote.filter(e => profile.owned.includes(e.id));
-        const grid = document.getElementById('emote-wheel-grid');
-        if (grid) {
-          grid.innerHTML = unlocked.map((em, idx) => `
-            <button onclick="triggerEmote('${em.id}')"
-              class="p-3 rounded-2xl bg-slate-900/90 hover:bg-pink-500/25 border border-slate-700 hover:border-pink-400 transition flex flex-col items-center gap-1.5">
-              <div class="w-10 h-10">${getItemSVG(em.id)}</div>
-              <span class="text-xs font-black text-white">${em.name}</span>
-              <span class="text-[10px] font-bold text-pink-300">[${idx + 1}]</span>
-            </button>
-          `).join('');
-        }
+        renderEmoteWheel();
         overlay.classList.remove('hidden');
       } else {
         overlay.classList.add('hidden');
       }
     }
 
+    function renderEmoteWheel() {
+      const grid = document.getElementById('emote-wheel-grid');
+      if (!grid) return;
+      grid.innerHTML = '';
+      CATALOG.emote.filter(em => profile.owned.includes(em.id)).forEach((em, idx) => {
+        const btn = document.createElement('button');
+        btn.className = 'p-3 rounded-2xl bg-slate-900/90 hover:bg-pink-500/20 border border-slate-700 hover:border-pink-400 flex items-center gap-2.5 text-left transition';
+        btn.innerHTML = `
+          <div class="w-9 h-9 rounded-xl bg-slate-950 p-1.5 border border-slate-800 shrink-0">${getItemSVG(em.id)}</div>
+          <div>
+            <div class="text-xs font-black text-white">[${idx + 1}] ${em.name}</div>
+            <div class="text-[10px] text-slate-400">${em.desc}</div>
+          </div>
+        `;
+        btn.onclick = () => triggerEmote(em.id);
+        grid.appendChild(btn);
+      });
+    }
+
     function triggerEmote(emoteId) {
-      const em = getItemById(emoteId);
-      if (!em) return;
       state.emoteId = emoteId;
-      state.emoteTimer = 2.8;
+      state.emoteTimer = 3.0;
       toggleEmoteWheel(false);
-      showToast('💃 ' + em.name);
+      syncLocalRealPlayerEntry();
     }
 
-    function openModal(modalId) {
+    function openModal(id) {
       exitGamePointerLock();
-      if (modalId === 'quests-modal') renderQuests();
-      if (modalId === 'settings-modal') {
-        const inp = document.getElementById('player-name-input');
-        if (inp) inp.value = profile.name;
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.remove('hidden');
+      if (id === 'quests-modal') renderQuests();
+      if (id === 'settings-modal') {
+        const nameInput = document.getElementById('player-name-input');
+        if (nameInput) nameInput.value = profile.name;
       }
-      const el = document.getElementById(modalId);
-      if (el) el.classList.remove('hidden');
     }
 
-    function closeModal(modalId) {
-      const el = document.getElementById(modalId);
+    function closeModal(id) {
+      const el = document.getElementById(id);
       if (el) el.classList.add('hidden');
-    }
-
-    function savePlayerName() {
-      const inp = document.getElementById('player-name-input');
-      const val = (inp ? inp.value : '').trim();
-      if (val) {
-        profile.name = val;
-        updateHUD();
-        updateHubLeaderboardTexture();
-        syncLocalRealPlayerEntry();
-        showToast('✅ Champion name updated to ' + profile.name);
-      }
     }
 
     function renderQuests() {
       const list = document.getElementById('quests-list');
       if (!list) return;
-      list.innerHTML = profile.quests.map(q => {
+      list.innerHTML = '';
+      profile.quests.forEach(q => {
         const done = q.progress >= q.target;
-        const btnCls = q.claimed
-          ? 'bg-slate-800 text-slate-500'
-          : done
-            ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
-            : 'bg-slate-800 text-slate-400 opacity-60';
-        const btnText = q.claimed ? '✓ Claimed' : done ? 'Claim' : 'In Progress';
-        return `
-          <div class="p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-3">
-            <div>
-              <div class="text-xs font-black text-white">${q.title}</div>
-              <div class="text-[11px] text-slate-400">${q.desc} (${q.progress}/${q.target})</div>
-              <div class="text-[10px] font-black text-amber-300 mt-1">Reward: 🪙 ${q.rewardCoins} + 💎 ${q.rewardDiamonds}</div>
-            </div>
-            <button onclick="claimQuest('${q.id}')" ${!done || q.claimed ? 'disabled' : ''}
-              class="px-3.5 py-2 rounded-xl text-xs font-black transition ${btnCls}">
-              ${btnText}
-            </button>
+        const card = document.createElement('div');
+        card.className = 'p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-3';
+        card.innerHTML = `
+          <div>
+            <div class="text-xs font-black text-white">${q.title}</div>
+            <div class="text-[11px] text-slate-400">${q.desc} (${q.progress}/${q.target})</div>
+            <div class="text-[10px] font-black text-amber-300 mt-1">Reward: +${q.rewardCoins} 🪙 & +${q.rewardDiamonds} 💎</div>
           </div>
+          <button onclick="claimQuest('${q.id}')" ${!done || q.claimed ? 'disabled' : ''}
+            class="px-3.5 py-2 rounded-xl text-xs font-black transition ${
+              q.claimed
+                ? 'bg-slate-800 text-slate-500'
+                : done
+                  ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-lg'
+                  : 'bg-slate-800 text-slate-400 opacity-60'
+            }">
+            ${q.claimed ? 'Claimed' : done ? 'Claim' : 'In Progress'}
+          </button>
         `;
-      }).join('');
+        list.appendChild(card);
+      });
     }
 
     function claimQuest(qId) {
-      const q = profile.quests.find(x => x.id === qId);
+      const q = profile.quests.find(item => item.id === qId);
       if (!q || q.claimed || q.progress < q.target) return;
       q.claimed = true;
       profile.coins += q.rewardCoins;
       profile.diamonds += q.rewardDiamonds;
       AudioFX.play('coin');
-      showToast('🎉 Claimed +' + q.rewardCoins + ' Coins & +' + q.rewardDiamonds + ' Diamonds!');
       renderQuests();
       updateHUD();
+      showToast('Bounty Claimed! +' + q.rewardCoins + ' 🪙 +' + q.rewardDiamonds + ' 💎');
+    }
+
+    function savePlayerName() {
+      const input = document.getElementById('player-name-input');
+      if (!input) return;
+      const clean = input.value.trim().slice(0, 16);
+      if (!clean) return;
+      profile.name = clean;
+      updateHUD();
+      updateHubLeaderboardTexture();
+      syncLocalRealPlayerEntry();
+      showToast('Champion Name updated to ' + profile.name);
     }
 
     function toggleSoundFX() {
@@ -3479,12 +3814,6 @@
       state.sensitivity = parseFloat(val) || 1.0;
       const lbl = document.getElementById('sens-val-label');
       if (lbl) lbl.textContent = state.sensitivity.toFixed(1) + 'x';
-    }
-
-    function triggerProximityInteract() {
-      if (state.proximityTarget && typeof state.proximityTarget.action === 'function') {
-        state.proximityTarget.action();
-      }
     }
 
     // =========================================================================
@@ -3590,56 +3919,88 @@
         return;
       }
 
-      if ((!pointerLockSupported && state.isPointerLocked) || state.isMouseDragging) {
-        if (!state.lastPointer) {
-          state.lastPointer = { x: e.clientX, y: e.clientY };
-        } else {
+      if ((!pointerLockSupported && state.isPointerLocked) || state.isMouseDragging || e.buttons > 0) {
+        if (typeof e.movementX === 'number' && typeof e.movementY === 'number' && (e.movementX !== 0 || e.movementY !== 0)) {
+          state.yaw -= e.movementX * 0.0042 * state.sensitivity;
+          applyVerticalPitchDelta(e.movementY, 0.0042);
+        } else if (state.lastPointer) {
           const dx = e.clientX - state.lastPointer.x;
           const dy = e.clientY - state.lastPointer.y;
-          state.lastPointer = { x: e.clientX, y: e.clientY };
-          state.yaw -= dx * 0.0044 * state.sensitivity;
-          applyVerticalPitchDelta(dy, 0.0040);
+          state.yaw -= dx * 0.0042 * state.sensitivity;
+          applyVerticalPitchDelta(dy, 0.0042);
         }
+        state.lastPointer = { x: e.clientX, y: e.clientY };
+        state.edgeTurnRate = 0;
+        return;
       }
+
+      if (state.lastPointer) {
+        const dx = e.clientX - state.lastPointer.x;
+        const dy = e.clientY - state.lastPointer.y;
+        state.yaw -= dx * 0.0042 * state.sensitivity;
+        applyVerticalPitchDelta(dy, 0.0042);
+      }
+      state.lastPointer = { x: e.clientX, y: e.clientY };
+
+      const w = window.innerWidth || 1280;
+      const edgeZone = Math.max(44, w * 0.045);
+      if (e.clientX < edgeZone) {
+        state.edgeTurnRate = ((edgeZone - e.clientX) / edgeZone) * 2.2 * state.sensitivity;
+      } else if (e.clientX > w - edgeZone) {
+        state.edgeTurnRate = -((e.clientX - (w - edgeZone)) / edgeZone) * 2.2 * state.sensitivity;
+      } else {
+        state.edgeTurnRate = 0;
+      }
+    });
+
+    window.addEventListener('blur', () => {
+      state.isMouseDragging = false;
+      state.lastPointer = null;
+      state.edgeTurnRate = 0;
+      state.blocking = false;
+    });
+
+    document.addEventListener('mouseleave', () => {
+      state.isMouseDragging = false;
+      state.lastPointer = null;
+      state.edgeTurnRate = 0;
     });
 
     canvas.addEventListener('touchstart', e => {
-      if (isAnyModalOpen() || e.touches.length === 0) return;
-      const t = e.touches[0];
-      state.lastPointer = { x: t.clientX, y: t.clientY };
+      AudioFX.init();
+      if (e.touches.length === 1) {
+        state.lastPointer = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      }
     }, { passive: true });
 
     canvas.addEventListener('touchmove', e => {
-      if (isAnyModalOpen() || e.touches.length === 0) return;
-      const t = e.touches[0];
-      if (state.lastPointer) {
-        const dx = t.clientX - state.lastPointer.x;
-        const dy = t.clientY - state.lastPointer.y;
-        state.yaw -= dx * 0.0052 * state.sensitivity;
-        applyVerticalPitchDelta(dy, 0.0048);
+      if (e.touches.length === 1 && state.lastPointer) {
+        const dx = e.touches[0].clientX - state.lastPointer.x;
+        const dy = e.touches[0].clientY - state.lastPointer.y;
+        state.yaw -= dx * 0.0065 * state.sensitivity;
+        applyVerticalPitchDelta(dy, 0.0065);
+        state.lastPointer = { x: e.touches[0].clientX, y: e.touches[0].clientY };
       }
-      state.lastPointer = { x: t.clientX, y: t.clientY };
     }, { passive: true });
 
-    canvas.addEventListener('touchend', () => {
-      state.lastPointer = null;
-    });
-
     window.addEventListener('keydown', e => {
-      if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
       const code = e.code;
       state.keys[code] = true;
 
       if (code === 'Escape') {
         exitGamePointerLock();
+        closeModal('shop-modal');
+        closeModal('armory-modal');
+        closeModal('quests-modal');
+        closeModal('settings-modal');
         toggleEmoteWheel(false);
-        ['shop-modal', 'armory-modal', 'quests-modal', 'settings-modal'].forEach(closeModal);
         return;
       }
 
-      const emoteOverlay = document.getElementById('emote-wheel-overlay');
-      if (emoteOverlay && !emoteOverlay.classList.contains('hidden')) {
-        if (code.startsWith('Digit')) {
+      if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+
+      if (!document.getElementById('emote-wheel-overlay').classList.contains('hidden')) {
+        if (['Digit1', 'Digit2', 'Digit3', 'Digit4'].includes(code)) {
           const idx = parseInt(code.replace('Digit', ''), 10) - 1;
           const unlocked = CATALOG.emote.filter(em => profile.owned.includes(em.id));
           if (unlocked[idx]) triggerEmote(unlocked[idx].id);
@@ -3648,28 +4009,32 @@
         return;
       }
 
-      if (code === 'Digit1') switchWeaponSlot('main');
+      if (code === 'Space' && !isAnyModalOpen()) {
+        e.preventDefault();
+        if (state.grounded) {
+          state.velY = 8.6;
+          state.grounded = false;
+        }
+      } else if (code === 'Digit1') switchWeaponSlot('main');
       else if (code === 'Digit2') switchWeaponSlot('close');
       else if (code === 'Digit3') switchWeaponSlot('ranged');
       else if (code === 'KeyQ') useAbility(0);
       else if (code === 'KeyE') useAbility(1);
       else if (code === 'KeyR') useAbility(2);
-      else if (code === 'KeyF') triggerProximityInteract();
-      else if (code === 'KeyB') {
-        const m = document.getElementById('shop-modal');
-        if (m && !m.classList.contains('hidden')) closeModal('shop-modal');
+      else if (code === 'KeyF') {
+        if (state.screen === 'hub' && state.proximityTarget && !isAnyModalOpen()) {
+          state.proximityTarget.action();
+        }
+      } else if (code === 'KeyB') {
+        const shopEl = document.getElementById('shop-modal');
+        if (shopEl && !shopEl.classList.contains('hidden')) closeModal('shop-modal');
         else openSamsShop();
       } else if (code === 'KeyC') {
-        const m = document.getElementById('armory-modal');
-        if (m && !m.classList.contains('hidden')) closeModal('armory-modal');
-        else openArmory();
+        const armEl = document.getElementById('armory-modal');
+        if (armEl && !armEl.classList.contains('hidden')) closeModal('armory-modal');
+        else openArmory('main');
       } else if (code === 'KeyG') {
         toggleEmoteWheel();
-      } else if (code === 'Space') {
-        if (!isAnyModalOpen() && state.grounded) {
-          state.velY = 8.6;
-          state.grounded = false;
-        }
       }
     });
 
@@ -3678,24 +4043,24 @@
     });
 
     Object.assign(window, {
-      performAttack,
-      switchWeaponSlot,
-      useAbility,
-      cancelQueue,
-      triggerProximityInteract,
-      returnToHub,
       openSamsShop,
       rerollSamsShop,
       buyShopItem,
       openArmory,
       selectArmoryTab,
       previewArmoryHover,
-      triggerPreviewSwing,
       resetPreviewOverride,
+      triggerPreviewSwing,
       equipArmoryItem,
-      selectVictoryEmote,
+      switchWeaponSlot,
+      useAbility,
+      performAttack,
+      queueForMatch,
+      cancelQueue,
+      triggerProximityInteract,
       playAgainFromFinish,
       closeMatchFinishedToHub,
+      selectVictoryEmote,
       toggleEmoteWheel,
       triggerEmote,
       openModal,
@@ -3707,10 +4072,10 @@
     });
 
     // =========================================================================
-    // 12. THREE.JS INITIALIZATION & MAIN SIMULATION LOOP
+    // 12. INITIALIZATION & MAIN 60FPS GAME LOOP
     // =========================================================================
     function initThreeEngine() {
-      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.shadowMap.enabled = true;
@@ -3719,94 +4084,62 @@
       scene = new THREE.Scene();
       camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 260);
 
+      const hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x0f172a, 0.98);
+      hemiLight.position.set(0, 40, 0);
+      scene.add(hemiLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.25);
+      dirLight.position.set(22, 38, 22);
+      dirLight.castShadow = true;
+      dirLight.shadow.mapSize.width = 1024;
+      dirLight.shadow.mapSize.height = 1024;
+      dirLight.shadow.camera.near = 2;
+      dirLight.shadow.camera.far = 110;
+      const d = 42;
+      dirLight.shadow.camera.left = -d;
+      dirLight.shadow.camera.right = d;
+      dirLight.shadow.camera.top = d;
+      dirLight.shadow.camera.bottom = -d;
+      scene.add(dirLight);
+
       skyGroup = new THREE.Group();
       worldGroup = new THREE.Group();
       entityGroup = new THREE.Group();
       fxGroup = new THREE.Group();
       scene.add(skyGroup, worldGroup, entityGroup, fxGroup);
 
-      const hemi = new THREE.HemisphereLight(0xe0f2fe, 0x0f172a, 0.95);
-      const sun = new THREE.DirectionalLight(0xfffbeb, 1.35);
-      sun.position.set(22, 38, 24);
-      sun.castShadow = true;
-      sun.shadow.mapSize.set(1024, 1024);
-      sun.shadow.camera.near = 2;
-      sun.shadow.camera.far = 110;
-      const d = 42;
-      sun.shadow.camera.left = -d;
-      sun.shadow.camera.right = d;
-      sun.shadow.camera.top = d;
-      sun.shadow.camera.bottom = -d;
-      scene.add(hemi, sun);
-
       window.addEventListener('resize', () => {
-        if (!renderer || !camera) return;
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
+        if (previewRenderer) initPreviewRenderer();
+        if (podiumRenderer) initPodiumRenderer();
       });
     }
 
-    let lastFrameTime = performance.now();
+    let lastTime = performance.now();
+    let shopTickAccum = 0;
 
     function animate(now) {
       requestAnimationFrame(animate);
-      const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
-      lastFrameTime = now;
+      const dt = Math.min(0.05, (now - lastTime) / 1000);
+      lastTime = now;
 
-      if (!renderer || !scene || !camera) return;
-
-      if (now - lastSyncSent > 80) {
-        lastSyncSent = now;
-        syncLocalRealPlayerEntry();
-      }
-      updateRemotePlayersInScene(dt);
-
-      state.shopTimerSec = Math.max(0, state.shopTimerSec - dt);
-      if (state.shopTimerSec === 0) {
-        state.shopTimerSec = 1800;
-        generateShopStock();
-        if (!document.getElementById('shop-modal').classList.contains('hidden')) {
-          renderSamsShop();
+      shopTickAccum += dt;
+      if (shopTickAccum >= 1.0) {
+        shopTickAccum -= 1.0;
+        state.shopTimerSec -= 1;
+        if (state.shopTimerSec <= 0) {
+          state.shopTimerSec = 1800;
+          generateShopStock();
+          if (!document.getElementById('shop-modal').classList.contains('hidden')) {
+            renderSamsShop();
+          }
         }
-      }
-      const shopTimerEl = document.getElementById('shop-timer-text');
-      if (shopTimerEl) {
-        const mins = Math.floor(state.shopTimerSec / 60);
-        const secs = Math.floor(state.shopTimerSec % 60);
-        shopTimerEl.textContent = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
-      }
-
-      const tSec = now * 0.001;
-      for (let i = 0; i < animatedProps.length; i++) {
-        const p = animatedProps[i];
-        p.mesh.rotation.y += dt * p.rotSpeed;
-        if (p.bobAmp > 0) {
-          p.mesh.position.y = p.baseY + Math.sin(tSec * 2.4 + i) * p.bobAmp;
-        }
-      }
-
-      for (let i = 0; i < hubNPCs.length; i++) {
-        const npc = hubNPCs[i];
-        npc.rig.torso.position.y = 1.18 + Math.sin(tSec * 2.8 + i) * 0.03;
-        if (npc.style === 'smith') {
-          npc.rig.rightArm.rotation.set(-1.3 + Math.sin(tSec * 7.0) * 0.65, 0, -0.2);
-          npc.rig.leftArm.rotation.set(-0.4, 0, 0.2);
-        } else {
-          npc.rig.rightArm.rotation.set(-0.3 + Math.sin(tSec * 2.2 + i) * 0.12, 0, -0.15);
-          npc.rig.leftArm.rotation.set(-0.3 - Math.sin(tSec * 2.2 + i) * 0.12, 0, 0.15);
-        }
-      }
-
-      if (state.queue) {
-        state.queue.timer -= dt;
-        const qText = document.getElementById('queue-text');
-        if (qText) {
-          qText.textContent = 'Searching ' + state.queue.title + '... (' + Math.max(1, Math.ceil(state.queue.timer)) + 's)';
-        }
-        if (state.queue.timer <= 0) {
-          startArenaMatch(state.queue.modeId, state.queue.title);
-        }
+        const mins = String(Math.floor(state.shopTimerSec / 60)).padStart(2, '0');
+        const secs = String(state.shopTimerSec % 60).padStart(2, '0');
+        const timerEl = document.getElementById('shop-timer-text');
+        if (timerEl) timerEl.textContent = mins + ':' + secs;
       }
 
       if (state.attackTimer > 0) state.attackTimer = Math.max(0, state.attackTimer - dt);
@@ -3815,7 +4148,10 @@
       if (state.berserkTimer > 0) state.berserkTimer = Math.max(0, state.berserkTimer - dt);
       if (state.comboTimer > 0) {
         state.comboTimer = Math.max(0, state.comboTimer - dt);
-        if (state.comboTimer === 0) state.comboCount = 0;
+        if (state.comboTimer === 0) {
+          state.comboStep = 0;
+          state.comboCount = 0;
+        }
       }
       if (state.emoteTimer > 0) {
         state.emoteTimer = Math.max(0, state.emoteTimer - dt);
@@ -3827,138 +4163,216 @@
         }
       }
 
+      for (let i = 0; i < animatedProps.length; i++) {
+        const p = animatedProps[i];
+        p.mesh.rotation.y += dt * p.rotSpeed;
+        if (p.bobAmp > 0) {
+          p.mesh.position.y = p.baseY + Math.sin(now * 0.003 + i) * p.bobAmp;
+        }
+      }
+
+      for (let i = 0; i < hubNPCs.length; i++) {
+        const npc = hubNPCs[i];
+        if (npc.style === 'smith') {
+          npc.rig.rightArm.rotation.set(-1.35 + Math.sin(now * 0.008) * 0.65, 0, -0.15);
+          npc.rig.leftArm.rotation.set(-0.4, 0, 0.2);
+          npc.rig.torso.rotation.y = Math.sin(now * 0.003) * 0.12;
+        } else if (npc.style === 'armory') {
+          npc.rig.rightArm.rotation.set(-0.95, 0.2, -0.2);
+          npc.rig.leftArm.rotation.set(-0.75 + Math.sin(now * 0.004) * 0.15, -0.25, 0.2);
+          npc.rig.torso.rotation.y = Math.sin(now * 0.0025) * 0.16;
+        } else {
+          npc.rig.rightArm.rotation.set(-0.65, 0, -0.15);
+          npc.rig.leftArm.rotation.set(-1.15 + Math.cos(now * 0.004) * 0.2, 0, 0.2);
+          npc.rig.torso.rotation.y = Math.cos(now * 0.0025) * 0.14;
+        }
+      }
+
+      // 30-second matchmaking queue: wait up to 30s for real players (and continue waiting if a player is taking a long time to connect)
+      if (state.queue) {
+        const peers = getActiveRemotePlayers();
+        const matchingPeers = peers.filter(
+          p => p.queueMode === state.queue.modeId || (p.screen === 'arena' && !state.usedFillBots)
+        );
+        const anyConnecting = matchingPeers.some(p => p.connectingArena);
+        const qText = document.getElementById('queue-text');
+
+        if (matchingPeers.length > 0) {
+          state.queue.connecting = true;
+          state.queue.connectWait = (state.queue.connectWait || 0) + dt;
+          if (qText) {
+            qText.textContent = 'Real player connecting to ' + state.queue.title + '... Waiting for connection';
+          }
+          if (state.queue.connectWait >= 1.5 || matchingPeers.some(p => p.screen === 'arena')) {
+            startArenaMatch(state.queue.modeId, state.queue.title, false);
+          }
+        } else if (anyConnecting) {
+          if (qText) {
+            qText.textContent = 'Player taking a moment to connect... Waiting for them to join';
+          }
+        } else {
+          state.queue.connecting = false;
+          state.queue.connectWait = 0;
+          state.queue.elapsed += dt;
+          const remaining = Math.max(0, Math.ceil(state.queue.maxWait - state.queue.elapsed));
+          if (qText) {
+            qText.textContent =
+              'Searching ' + state.queue.title + '... (' + remaining + 's until fill-in bot)';
+          }
+          if (state.queue.elapsed >= state.queue.maxWait) {
+            startArenaMatch(state.queue.modeId, state.queue.title, true);
+          }
+        }
+      }
+
       const stats = computeStats();
-      const modalOpen = isAnyModalOpen();
-      if (!modalOpen && (state.keys['ArrowLeft'] || state.keys['ArrowRight'])) {
-        const turnDir = (state.keys['ArrowLeft'] ? 1 : 0) - (state.keys['ArrowRight'] ? 1 : 0);
-        state.yaw += turnDir * 2.4 * state.sensitivity * dt;
-      }
-      if (!modalOpen && (state.keys['ArrowUp'] || state.keys['ArrowDown'])) {
-        const pitchDir = (state.keys['ArrowDown'] ? 1 : 0) - (state.keys['ArrowUp'] ? 1 : 0);
-        applyVerticalPitchDelta(pitchDir * 2.2 * dt, 1.0);
+      if (state.edgeTurnRate !== 0 && !isAnyModalOpen() && document.pointerLockElement !== canvas) {
+        state.yaw += state.edgeTurnRate * dt;
       }
 
-      let moveX = 0;
-      let moveZ = 0;
-      if (!modalOpen && (state.screen === 'hub' || state.hp > 0)) {
-        if (state.keys['KeyW']) moveZ -= 1;
-        if (state.keys['KeyS']) moveZ += 1;
-        if (state.keys['KeyA']) moveX -= 1;
-        if (state.keys['KeyD']) moveX += 1;
+      let forwardInput = 0;
+      let rightInput = 0;
+      if (!isAnyModalOpen() && !(document.activeElement && document.activeElement.tagName === 'INPUT')) {
+        if (state.keys['KeyW'] || state.keys['ArrowUp']) forwardInput += 1;
+        if (state.keys['KeyS'] || state.keys['ArrowDown']) forwardInput -= 1;
+        if (state.keys['KeyD'] || state.keys['ArrowRight']) rightInput += 1;
+        if (state.keys['KeyA'] || state.keys['ArrowLeft']) rightInput -= 1;
       }
 
-      const hasMoveInput = moveX !== 0 || moveZ !== 0;
-      const wantsSprint = !modalOpen && (state.keys['ShiftLeft'] || state.keys['ShiftRight']) && hasMoveInput && !state.blocking;
+      const isMoving = forwardInput !== 0 || rightInput !== 0;
+      const wantsSprint = (state.keys['ShiftLeft'] || state.keys['ShiftRight']) && isMoving && !state.blocking;
       const isSprinting = wantsSprint && state.stamina > 2;
 
       const sprintTag = document.getElementById('hud-sprint-tag');
       if (sprintTag) sprintTag.classList.toggle('hidden', !isSprinting);
 
       if (isSprinting) {
-        state.stamina = Math.max(0, state.stamina - 24 * dt);
+        state.stamina = Math.max(0, state.stamina - 22 * dt);
       } else {
         state.stamina = Math.min(stats.maxStamina, state.stamina + stats.stamRegen * dt);
       }
 
-      let speed = stats.moveSpeed;
-      if (isSprinting) speed *= 1.46;
-      if (state.blocking) speed *= 0.56;
-      if (state.dashTimer > 0) speed *= 2.85;
+      let currentMoveSpeed = 0;
+      if (isMoving || state.dashTimer > 0) {
+        if (state.emoteId) state.emoteId = null;
+        const fwd = new THREE.Vector3(-Math.sin(state.yaw), 0, -Math.cos(state.yaw));
+        const right = new THREE.Vector3(Math.cos(state.yaw), 0, -Math.sin(state.yaw));
+        const moveDir = new THREE.Vector3();
 
-      let horizontalSpeed = 0;
-      if (hasMoveInput || state.dashTimer > 0) {
-        const inputVec = hasMoveInput
-          ? new THREE.Vector3(moveX, 0, moveZ).normalize()
-          : new THREE.Vector3(0, 0, -1);
-        inputVec.applyAxisAngle(new THREE.Vector3(0, 1, 0), state.yaw);
-        state.pos.x += inputVec.x * speed * dt;
-        state.pos.z += inputVec.z * speed * dt;
-        horizontalSpeed = speed;
+        if (state.dashTimer > 0 && !isMoving) {
+          moveDir.copy(fwd);
+        } else {
+          moveDir.addScaledVector(fwd, forwardInput).addScaledVector(right, rightInput);
+          if (moveDir.lengthSq() > 0) moveDir.normalize();
+        }
+
+        currentMoveSpeed = state.dashTimer > 0
+          ? 24.0
+          : isSprinting
+            ? stats.moveSpeed * 1.48
+            : state.blocking
+              ? stats.moveSpeed * 0.56
+              : stats.moveSpeed;
+
+        state.pos.x += moveDir.x * currentMoveSpeed * dt;
+        state.pos.z += moveDir.z * currentMoveSpeed * dt;
       }
 
-      const onArrivalSanctuary = state.screen === 'hub' && Math.hypot(state.pos.x, state.pos.z - 27.5) < 4.5;
-      const groundY = onArrivalSanctuary ? 0.36 : 0;
+      const maxBoundary = state.screen === 'hub' ? 36.2 : 26.2;
+      const radialDist = Math.hypot(state.pos.x, state.pos.z);
+      if (radialDist > maxBoundary) {
+        state.pos.x = (state.pos.x / radialDist) * maxBoundary;
+        state.pos.z = (state.pos.z / radialDist) * maxBoundary;
+      }
+
+      resolveObstacleCollisions(state.pos, 0.58);
+
+      let groundHeight = 0;
+      if (state.screen === 'hub') {
+        const dSpawn = Math.hypot(state.pos.x, state.pos.z - 27.5);
+        if (dSpawn < 3.6) groundHeight = 0.36;
+        else if (dSpawn < 4.7) groundHeight = 0.18;
+      }
 
       state.velY -= 22.0 * dt;
       state.pos.y += state.velY * dt;
-      if (state.pos.y <= groundY) {
-        state.pos.y = groundY;
+      if (state.pos.y <= groundHeight) {
+        state.pos.y = groundHeight;
         state.velY = 0;
         state.grounded = true;
       }
 
-      const maxBound = state.screen === 'hub' ? 35.8 : 26.2;
-      const radialDist = Math.hypot(state.pos.x, state.pos.z);
-      if (radialDist > maxBound) {
-        state.pos.x = (state.pos.x / radialDist) * maxBound;
-        state.pos.z = (state.pos.z / radialDist) * maxBound;
-      }
-      resolveObstacleCollisions(state.pos, 0.58);
-
       if (localWarriorRig) {
         localWarriorRig.root.position.copy(state.pos);
-        if (!state.emoteId || state.emoteId !== 'spin_flourish') {
+        if (!state.emoteId) {
           localWarriorRig.root.rotation.y = state.yaw + Math.PI;
         }
         const activeWep = getItemById(profile.equipped[state.activeSlot]) || CATALOG.main[0];
         animateWarriorRig(localWarriorRig, dt, {
-          speed: horizontalSpeed,
+          speed: currentMoveSpeed,
           attackTimer: state.attackTimer,
+          comboStep: state.comboStep,
           blocking: state.blocking,
           emoteId: state.emoteId,
-          comboStep: state.comboStep,
           grip: activeWep.grip,
+          baseY: state.pos.y,
           grounded: state.grounded,
-          pitch: state.pitch,
-          baseY: state.pos.y
+          pitch: state.pitch
         });
       }
 
       if (state.screen === 'hub') {
         let nearest = null;
-        let nearestDist = Infinity;
+        let bestDist = Infinity;
         for (let i = 0; i < hubInteractables.length; i++) {
           const item = hubInteractables[i];
           const d = Math.hypot(state.pos.x - item.pos.x, state.pos.z - item.pos.z);
-          if (d <= item.radius && d < nearestDist) {
-            nearestDist = d;
+          if (d <= item.radius && d < bestDist) {
+            bestDist = d;
             nearest = item;
           }
         }
         state.proximityTarget = nearest;
         const promptEl = document.getElementById('interact-prompt');
         const textEl = document.getElementById('interact-text');
-        if (promptEl && textEl) {
-          if (nearest && !modalOpen) {
-            textEl.textContent = nearest.label;
-            promptEl.classList.remove('hidden');
-          } else {
-            promptEl.classList.add('hidden');
-          }
+        if (nearest && !isAnyModalOpen()) {
+          promptEl.classList.remove('hidden');
+          textEl.textContent = nearest.label;
+        } else {
+          promptEl.classList.add('hidden');
         }
       } else {
         state.proximityTarget = null;
+        document.getElementById('interact-prompt').classList.add('hidden');
+      }
+
+      if (state.screen === 'arena' && arenaFillBots.length > 0) {
+        updateArenaFillBots(dt);
       }
 
       if (state.screen === 'arena' && state.matchConfig && !state.matchConfig.roundEnding) {
         state.matchConfig.roundTime = Math.max(0, state.matchConfig.roundTime - dt);
+        const m = String(Math.floor(state.matchConfig.roundTime / 60)).padStart(2, '0');
+        const s = String(Math.floor(state.matchConfig.roundTime % 60)).padStart(2, '0');
         const timerEl = document.getElementById('match-timer');
-        if (timerEl) {
-          const m = Math.floor(state.matchConfig.roundTime / 60);
-          const s = Math.floor(state.matchConfig.roundTime % 60);
-          timerEl.textContent = String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-        }
-        if (state.matchConfig.roundTime === 0) {
+        if (timerEl) timerEl.textContent = m + ':' + s;
+        if (state.matchConfig.roundTime <= 0) {
           state.matchConfig.roundEnding = true;
           finishArenaMatch(state.blueScore >= state.redScore);
         }
       }
 
+      updateRemotePlayersInScene(dt);
+      if (now - lastSyncSent > 80) {
+        lastSyncSent = now;
+        syncLocalRealPlayerEntry();
+      }
+
       for (let i = projectiles.length - 1; i >= 0; i--) {
         const p = projectiles[i];
-        p.life -= dt;
         p.pos.addScaledVector(p.vel, dt);
         p.mesh.position.copy(p.pos);
+        p.life -= dt;
 
         let hit = false;
         if (p.team === 'blue' && state.screen === 'arena') {
@@ -3970,11 +4384,29 @@
               break;
             }
           }
+          if (!hit) {
+            for (const bot of arenaFillBots) {
+              if (bot.hp > 0 && bot.team === 'red' && bot.pos.distanceTo(p.pos) < 1.35) {
+                damageFillInBot(bot, p.dmg);
+                hit = true;
+                break;
+              }
+            }
+          }
         } else if (p.team === 'red' && state.screen === 'arena') {
           if (state.hp > 0 && state.pos.distanceTo(p.pos) < 1.25) {
             const shooter = p.ownerId ? realPlayersMap.get(p.ownerId) : null;
-            applyPvpDamageToLocalPlayer(p.dmg, p.ownerId, shooter ? shooter.name : 'Player');
+            applyPvpDamageToLocalPlayer(p.dmg, p.ownerId, shooter ? shooter.name : 'Fill-In Bot');
             hit = true;
+          }
+          if (!hit) {
+            for (const bot of arenaFillBots) {
+              if (bot.hp > 0 && bot.team === 'blue' && bot.pos.distanceTo(p.pos) < 1.35) {
+                damageFillInBot(bot, p.dmg);
+                hit = true;
+                break;
+              }
+            }
           }
         }
 
@@ -3989,52 +4421,55 @@
         s.life -= dt;
         const alpha = Math.max(0, s.life / 0.24);
         s.outerMat.opacity = alpha * 0.92;
-        s.coreMat.opacity = alpha * 0.95;
-        s.group.scale.addScalar(dt * 1.4);
+        s.coreMat.opacity = alpha;
+        s.group.scale.addScalar(dt * 3.4);
         if (s.life <= 0) {
           fxGroup.remove(s.group);
           slashEffects.splice(i, 1);
         }
       }
 
-      const camDist = 6.2;
-      const targetPos = new THREE.Vector3(state.pos.x, state.pos.y + 1.65, state.pos.z);
-      const horizDist = Math.cos(state.pitch) * camDist;
-      const vertOffset = Math.sin(state.pitch) * camDist;
-      const camX = targetPos.x + Math.sin(state.yaw) * horizDist;
-      const camZ = targetPos.z + Math.cos(state.yaw) * horizDist;
-      const camY = Math.max(0.45, targetPos.y + vertOffset);
-
-      camera.position.lerp(new THREE.Vector3(camX, camY, camZ), 0.28);
-      const lookPitch = Math.max(-0.95, Math.min(0.95, state.pitch));
-      const lookTarget = new THREE.Vector3(
-        targetPos.x - Math.sin(state.yaw) * 4.5,
-        targetPos.y - Math.sin(lookPitch) * 4.5,
-        targetPos.z - Math.cos(state.yaw) * 4.5
+      const camDist = 6.3;
+      const horizontalDist = camDist * Math.cos(state.pitch);
+      const verticalOffset = camDist * Math.sin(state.pitch);
+      const targetCamPos = new THREE.Vector3(
+        state.pos.x + Math.sin(state.yaw) * horizontalDist,
+        Math.max(0.75, state.pos.y + 1.65 + verticalOffset),
+        state.pos.z + Math.cos(state.yaw) * horizontalDist
       );
-      camera.lookAt(lookTarget);
+      camera.position.lerp(targetCamPos, 0.28);
+      camera.lookAt(state.pos.x, state.pos.y + 1.48, state.pos.z);
 
-      if (previewRenderer && previewScene && previewCamera && !document.getElementById('armory-modal').classList.contains('hidden')) {
+      renderer.render(scene, camera);
+
+      if (previewRenderer && !document.getElementById('armory-modal').classList.contains('hidden')) {
         if (state.previewSwingTimer > 0) state.previewSwingTimer = Math.max(0, state.previewSwingTimer - dt);
         if (state.previewEmoteTimer > 0) {
           state.previewEmoteTimer = Math.max(0, state.previewEmoteTimer - dt);
           if (state.previewEmoteTimer === 0) state.previewEmoteId = null;
         }
         if (previewRig) {
-          previewRig.root.rotation.y += dt * 0.85;
+          if (!state.previewEmoteId) previewRig.root.rotation.y += dt * 0.7;
+          const prevSlot = ['main', 'close', 'ranged'].includes(state.armoryTab) ? state.armoryTab : state.activeSlot;
+          const prevWep = getItemById({ ...profile.equipped, ...state.previewOverride }[prevSlot]) || CATALOG.main[0];
           animateWarriorRig(previewRig, dt, {
+            speed: 0,
             attackTimer: state.previewSwingTimer,
             emoteId: state.previewEmoteId,
+            grip: prevWep.grip,
             baseY: 0
           });
         }
         previewRenderer.render(previewScene, previewCamera);
       }
 
-      if (podiumRenderer && podiumScene && podiumCamera && !document.getElementById('match-finished-modal').classList.contains('hidden')) {
+      if (podiumRenderer && !document.getElementById('match-finished-modal').classList.contains('hidden')) {
         if (podiumRig) {
-          podiumRig.root.rotation.y += dt * 0.75;
+          if (state.podiumEmoteId !== 'spin_flourish') {
+            podiumRig.root.rotation.y = Math.sin(now * 0.0015) * 0.35;
+          }
           animateWarriorRig(podiumRig, dt, {
+            speed: 0,
             emoteId: state.podiumEmoteId,
             baseY: 0
           });
@@ -4043,7 +4478,6 @@
       }
 
       updateHUD();
-      renderer.render(scene, camera);
     }
 
     window.addEventListener('load', () => {
@@ -4051,8 +4485,8 @@
       generateShopStock();
       buildGrandForgeHub();
       rebuildLocalWarrior();
-      syncLocalRealPlayerEntry();
       updateHUD();
+      syncLocalRealPlayerEntry();
       requestAnimationFrame(animate);
     });
   </script>
